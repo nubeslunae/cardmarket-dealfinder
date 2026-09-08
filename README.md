@@ -112,6 +112,9 @@ CardTrader-spel.
   token leven alleen in je browser. Let op: alle `nubeslunae.github.io`-sites delen dezelfde origin
   en dus dezelfde `localStorage`.
 - CardTrader-links gaan naar `/en/cards/<blueprint-id>`.
+- **PSA ↗** linkt naar PriceCharting's zoekpagina (prijzen per grade in USD). Bewust geen automatische
+  koppeling: API en CSV vereisen hun betaalde Legendary-abonnement en de voorwaarden verbieden
+  weergave in een voor derden bereikbare app.
 - Geen auto-buy. De CardTrader-cart-API wordt bewust niet aangeroepen.
 
 Ontwerp: `docs/superpowers/specs/2026-09-08-cardmarket-dealfinder-design.md`.
