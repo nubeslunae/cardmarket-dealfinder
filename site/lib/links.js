@@ -36,3 +36,15 @@ export function cardmarketSearchUrl(game, name) {
 }
 
 export const cardtraderUrl = (blueprintId) => `https://www.cardtrader.com/en/cards/${blueprintId}`;
+
+/** Sets die op Cardmarket alleen in Aziatische talen bestaan (Japans, Koreaans, Chinees, Thai, Indonesisch). */
+const ASIAN_SET = /japan|korea|chinese|thai|indonesia|taiwan|asia|\bJP\b|\bKR\b|\bTC\b|\bSC\b|\bID\/TH\b/i;
+export function isAsianSetName(name) {
+  return typeof name === 'string' && ASIAN_SET.test(name);
+}
+
+/** Voorstel voor een koopprijs (wants list): een vast percentage van het 7-daags verkoopgemiddelde, afgerond op 5 cent. */
+export function suggestedBuyPrice(avg7, pct = 0.75) {
+  if (avg7 == null || avg7 <= 0) return null;
+  return Math.max(0.05, Math.floor((avg7 * pct) / 0.05) * 0.05);
+}

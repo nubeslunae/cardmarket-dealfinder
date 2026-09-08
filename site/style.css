@@ -239,3 +239,50 @@ main { padding: 16px 22px 40px; max-width: 1400px; margin: 0 auto; }
 .grid td.name strong { font-weight: 600; }
 .grid td.name .attacks { color: var(--muted); font-size: 12px; }
 .grid td.actions a { margin-right: 4px; }
+
+/* ---- vandaag / negeren / sparkline ---- */
+.today { margin-bottom: 12px; }
+.today .card-body { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 10px 18px; }
+.today h2 { font-size: 14px; margin: 0 0 6px; }
+.today ul { margin: 0; padding-left: 18px; font-size: 13px; }
+.today li { margin: 2px 0; }
+.today .msg { margin: 0; }
+.spark { width: 96px; height: 24px; vertical-align: middle; }
+.spark polyline { fill: none; stroke: var(--accent); stroke-width: 1.5; }
+.spark circle { fill: var(--accent); }
+.grid tr.ignored { opacity: 0.55; }
+.filters-wrap summary { display: none; }
+
+/* ---- mobiel ---- */
+@media (max-width: 720px) {
+  body { font-size: 15px; }
+  .top { position: sticky; top: 0; z-index: 20; padding: 10px 12px 0; gap: 6px; }
+  .brand h1 { font-size: 17px; }
+  .sub { margin-bottom: 6px; font-size: 12px; }
+  .tabs { width: 100%; }
+  .tab { flex: 1; text-align: center; padding: 10px 4px; font-size: 13px; }
+  main { padding: 10px 10px 40px; }
+  .filters-wrap summary { display: block; padding: 10px 12px; font-weight: 600; background: var(--surface); border: 1px solid var(--line); border-radius: 8px; cursor: pointer; }
+  .filters-wrap[open] summary { border-radius: 8px 8px 0 0; }
+  .filters { border-top: 0; border-radius: 0 0 8px 8px; gap: 8px 10px; padding: 10px; }
+  .filters label { flex: 1 1 45%; }
+  .filters label.grow { flex-basis: 100%; }
+  .filters input, .filters select, .wl-add input, .row input, .row select, .settings input, .settings select { width: 100%; min-height: 42px; font-size: 16px; }
+  .filters input[type="number"] { width: 100%; }
+  .filters label.check { flex-basis: 100%; padding: 4px 0; }
+  .filters .btn { min-height: 42px; flex: 1 1 30%; }
+  .grid th.opt, .grid td.opt { display: none; }
+  .grid th, .grid td { padding: 8px 6px; }
+  .grid td.name { min-width: 150px; max-width: 220px; }
+  .grid td.name .set-inline { display: block; color: var(--muted); font-size: 12px; font-weight: 400; }
+  .grid td.actions { white-space: normal; min-width: 130px; }
+  .grid td.actions a, .grid button, .btn { display: inline-block; padding: 8px 10px; margin: 2px 4px 2px 0; font-size: 13px; }
+  .grid input.max { width: 74px; min-height: 36px; font-size: 16px; }
+  .wl-actions .btn { flex: 1 1 45%; }
+  .live-grid { grid-template-columns: 1fr; }
+  .row { flex-direction: column; align-items: stretch; }
+  .row select[multiple] { min-width: 0; }
+  .facts { grid-template-columns: 1fr; }
+  .spark { width: 72px; }
+}
+@media (min-width: 721px) { .grid td.name .set-inline { display: none; } }

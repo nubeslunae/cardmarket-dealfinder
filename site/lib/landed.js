@@ -18,7 +18,7 @@ export const DEFAULT_SETTINGS = Object.freeze({
   expectedBasketSize: 5,     // over hoeveel kaarten de hub-verzending omgeslagen wordt
   sellCommissionPct: 5,      // verkoperscommissie bij doorverkoop tegen trend
   minCondition: 3,           // Slightly Played of beter
-  languages: [],             // lege lijst = alle talen; anders bv. ['en', 'de']
+  languages: ['en'],         // standaard alleen Engels; lege lijst = alle talen
   countries: [],             // lege lijst = alle landen
   hubOnly: false,
   excludeVacation: true,

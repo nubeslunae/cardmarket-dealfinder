@@ -3,9 +3,9 @@
 import {
   DEFAULT_SETTINGS, normalizeListing, passesFilters, landedCost, resaleMargin, adjustedReference, optimizeBasket,
 } from './lib/landed.js';
-import { splitName, cardmarketCardUrl, cardmarketSetUrl, cardmarketSearchUrl, cardtraderUrl } from './lib/links.js';
+import { splitName, cardmarketCardUrl, cardmarketSetUrl, cardmarketSearchUrl, cardtraderUrl, isAsianSetName, suggestedBuyPrice } from './lib/links.js';
 
-const LS = { filters: 'cmdf.filters', watchlist: 'cmdf.watchlist', wlFilters: 'cmdf.wlfilters', token: 'cmdf.ct.token', ctSettings: 'cmdf.ct.settings', liveFilters: 'cmdf.livefilters' };
+const LS = { filters: 'cmdf.filters', watchlist: 'cmdf.watchlist', wlFilters: 'cmdf.wlfilters', token: 'cmdf.ct.token', ctSettings: 'cmdf.ct.settings', liveFilters: 'cmdf.livefilters', ignored: 'cmdf.ignored' };
 const PAGE_SIZE = 200;
 const CT_BASE = 'https://api.cardtrader.com/api/v2';
 const CT_DELAY_MS = 250; // 4 requests/s; CardTrader staat 10/s toe op marketplace
@@ -15,6 +15,7 @@ const state = {
   meta: null, deals: [], expansions: new Map(), index: null, shards: new Map(),
   filters: loadJson(LS.filters, {}), wlFilters: loadJson(LS.wlFilters, {}), liveFilters: loadJson(LS.liveFilters, {}),
   watchlist: loadWatchlist(), visible: PAGE_SIZE, liveVisible: PAGE_SIZE,
+  ignored: new Set(loadJson(LS.ignored, [])), history: null,
   ct: { token: loadRaw(LS.token), settings: { ...DEFAULT_SETTINGS, ...loadJson(LS.ctSettings, {}) }, map: null, byBlueprint: null, expansions: [], abort: false, busy: false },
   live: [],          // genormaliseerde listings verrijkt met Cardmarket-referentie
   liveWatch: [],     // resultaat van laatste watchlist-check (voor het mandje)
@@ -89,36 +90,83 @@ function bindForm(form, obj, defaults, onChange) {
   });
 }
 
-/* ---------- tabs ---------- */
+/* ---------- tabs + deelbare URL (#tab?filter=…) ---------- */
+function readHash() {
+  const raw = (location.hash || '').replace(/^#/, '');
+  const [tab, query] = raw.split('?');
+  const params = {};
+  if (query) for (const [k, v] of new URLSearchParams(query)) params[k] = v;
+  return { tab, params };
+}
+function writeHash(tab) {
+  const current = readHash();
+  const t = tab || current.tab || 'deals';
+  let query = '';
+  if (t === 'deals') {
+    const diff = Object.entries(state.filters).filter(([k, v]) => String(v) !== String(DEAL_DEFAULTS[k] ?? '')).map(([k, v]) => [k, typeof v === 'boolean' ? (v ? '1' : '0') : String(v)]);
+    query = diff.length ? `?${new URLSearchParams(diff)}` : '';
+  }
+  try { history.replaceState(null, '', `#${t}${query}`); } catch { /* noop */ }
+}
 function initTabs() {
   $$('.tab').forEach((btn) => btn.addEventListener('click', () => showTab(btn.dataset.tab)));
-  const wanted = (location.hash || '').replace('#', '');
-  if ($$('.tab').some((b) => b.dataset.tab === wanted)) showTab(wanted);
+  const { tab } = readHash();
+  if ($$('.tab').some((b) => b.dataset.tab === tab)) showTab(tab);
 }
 function showTab(name) {
   $$('.tab').forEach((b) => b.classList.toggle('is-active', b.dataset.tab === name));
   $$('.panel').forEach((p) => p.classList.toggle('is-active', p.id === `tab-${name}`));
   if (name === 'watchlist') renderWatchlist();
   if (name === 'live') initLiveOnce();
-  try { history.replaceState(null, '', `#${name}`); } catch { /* noop */ }
+  writeHash(name);
 }
 
 /* ---------- deals ---------- */
-const DEAL_DEFAULTS = { signal: 'low', ref: 'avg7', variant: 'n', minTrend: 10, maxTrend: '', minLow: '', maxLow: '', minDisc: 30, exp: '', sort: 'score', q: '', onlyDouble: false, hideWatched: false, plausibleOnly: true };
+const DEAL_DEFAULTS = { signal: 'low', ref: 'avg7', variant: 'n', minTrend: 10, maxTrend: '', minLow: '', maxLow: '', minDisc: 25, maxDisc: 70, expq: '', exp: '', sort: 'gap', q: '', onlyDouble: false, hideWatched: false, showIgnored: false, plausibleOnly: true, hideAsian: true };
 const PREV_LOW_INDEX = { n: 13, h: 14 };
 function initDeals() {
   const form = $('#filters');
-  bindForm(form, state.filters, DEAL_DEFAULTS, () => { save(LS.filters, state.filters); state.visible = PAGE_SIZE; renderDeals(); });
-  $('#filters-reset').addEventListener('click', () => { state.filters = { ...DEAL_DEFAULTS }; save(LS.filters, state.filters); for (const [k, v] of Object.entries(DEAL_DEFAULTS)) { const el = form.elements[k]; if (el) { if (el.type === 'checkbox') el.checked = v; else el.value = v; } } renderDeals(); });
+  // Filters uit een gedeelde link overschrijven de opgeslagen filters.
+  const { params } = readHash();
+  for (const [k, v] of Object.entries(params)) if (k in DEAL_DEFAULTS) state.filters[k] = typeof DEAL_DEFAULTS[k] === 'boolean' ? v === '1' : v;
+  bindForm(form, state.filters, DEAL_DEFAULTS, () => { save(LS.filters, state.filters); state.visible = PAGE_SIZE; fillExpansionSelect(); writeHash('deals'); renderDeals(); });
+  // In-place, want bindForm houdt een verwijzing naar dit object vast.
+  const applyDefaults = () => { Object.assign(state.filters, DEAL_DEFAULTS); save(LS.filters, state.filters); for (const [k, v] of Object.entries(DEAL_DEFAULTS)) { const el = form.elements[k]; if (el) { if (el.type === 'checkbox') el.checked = v; else el.value = v; } } fillExpansionSelect(); writeHash('deals'); renderDeals(); };
+  $('#filters-reset').addEventListener('click', applyDefaults);
   $('#deals-more').addEventListener('click', () => { state.visible += PAGE_SIZE; renderDeals(); });
   $('#deals-table').addEventListener('click', onDealsClick);
-  $$('#deals-table th[data-sort]').forEach((th) => th.addEventListener('click', () => { state.filters.sort = th.dataset.sort; form.elements.sort.value = th.dataset.sort; save(LS.filters, state.filters); renderDeals(); }));
+  $$('#deals-table th[data-sort]').forEach((th) => th.addEventListener('click', () => { state.filters.sort = th.dataset.sort; form.elements.sort.value = th.dataset.sort; save(LS.filters, state.filters); writeHash('deals'); renderDeals(); }));
+  $('#deals-csv').addEventListener('click', exportCsv);
+  $('#deals-share').addEventListener('click', async () => {
+    writeHash('deals');
+    try { await navigator.clipboard.writeText(location.href); $('#deals-summary').textContent = `Link met deze filters gekopieerd: ${location.href}`; } catch { prompt('Kopieer deze link', location.href); }
+  });
+  try { if (matchMedia('(max-width: 720px)').matches) $('#filters-wrap').open = false; } catch { /* noop */ }
+  $('#ignored-count').textContent = String(state.ignored.size);
 }
 function fillExpansionSelect() {
   const sel = $('#filters').elements.exp;
-  const opts = [...state.expansions.values()].map((e) => { const o = document.createElement('option'); o.value = e.id; o.textContent = `${expLabel(e.id)} (${e.count})`; return o; });
-  sel.replaceChildren(new Option('alle sets', ''), ...opts);
-  sel.value = state.filters.exp || '';
+  const q = (state.filters.expq || '').toLowerCase();
+  const list = [...state.expansions.values()].filter((e) => !q || expLabel(e.id).toLowerCase().includes(q) || String(e.id) === q);
+  const opts = list.map((e) => { const o = document.createElement('option'); o.value = e.id; o.textContent = `${expLabel(e.id)} (${e.count})`; return o; });
+  const current = String(state.filters.exp || '');
+  sel.replaceChildren(new Option(q ? `alle ${list.length} gevonden sets` : 'alle sets', ''), ...opts);
+  if (current && [...sel.options].some((o) => o.value === current)) sel.value = current; else if (current) { state.filters.exp = ''; sel.value = ''; }
+}
+function exportCsv() {
+  const rows = state.results || [];
+  const head = ['id', 'kaart', 'set', 'variant', 'laagste', 'vorige7d', 'trend', 'gem1d', 'gem7d', 'gem30d', 'referentie', 'verschil', 'eronder_pct', 'cardmarket_kaart', 'cardmarket_set'];
+  const cell = (v) => (v == null ? '' : typeof v === 'number' ? String(v).replace('.', ',') : `"${String(v).replace(/"/g, '""')}"`);
+  const lines = [head.join(';')];
+  for (const d of rows) lines.push([d.id, d.name, expLabel(d.exp), d.variant === 'h' ? 'holo' : 'normaal', d.low, d.prevLow, d.trend, d.avg1, d.avg7, d.avg30, d.refVal, d.gap, d.score == null ? null : Math.round(d.score * 100), cardmarketCardUrl(gameSlug(), d.name), cardmarketSetUrl(gameSlug(), d.name, d.exp)].map(cell).join(';'));
+  const csv = `﻿${lines.join('\n')}`;
+  try {
+    const a = document.createElement('a'); a.href = URL.createObjectURL(new Blob([csv], { type: 'text/csv;charset=utf-8' })); a.download = `deals-${new Date().toISOString().slice(0, 10)}.csv`; a.click();
+    setTimeout(() => URL.revokeObjectURL(a.href), 5000);
+    $('#deals-summary').textContent = `${rows.length} rijen geëxporteerd als CSV (puntkomma-gescheiden, opent direct in Excel).`;
+  } catch {
+    navigator.clipboard?.writeText(csv).then(() => { $('#deals-summary').textContent = `${rows.length} rijen als CSV naar het klembord gekopieerd.`; }).catch(() => {});
+  }
 }
 function evaluate(row, variant, ref = state.filters.ref || 'avg7') {
   const o = OFFSET[variant];
@@ -143,14 +191,17 @@ function computeDeals() {
   const f = state.filters;
   const variants = f.variant === 'both' ? ['n', 'h'] : [f.variant];
   const minDisc = Number(f.minDisc) / 100;
+  const maxDisc = f.maxDisc === '' || f.maxDisc == null ? null : Number(f.maxDisc) / 100;
   const minTrend = Number(f.minTrend) || 0, maxTrend = num(f.maxTrend), minLow = num(f.minLow), maxLow = num(f.maxLow);
   const exp = f.exp ? Number(f.exp) : null;
   const q = (f.q || '').toLowerCase();
   const watched = new Set(state.watchlist.map((w) => `${w.id}:${w.variant}`));
+  const asianSets = new Set([...state.expansions.values()].filter((e) => isAsianSetName(e.name)).map((e) => e.id));
   const out = [];
   let hiddenImplausible = 0;
   for (const row of state.deals) {
     if (exp != null && row[2] !== exp) continue;
+    if (f.hideAsian && asianSets.has(row[2])) continue;
     if (q && !row[1].toLowerCase().includes(q) && String(row[2]) !== q) continue;
     for (const v of variants) {
       const d = evaluate(row, v);
@@ -160,8 +211,11 @@ function computeDeals() {
       if (maxLow != null && (d.low == null || d.low > maxLow)) continue;
       const primary = { low: d.dRef, new: d.dNew, sold: d.dSold, week: d.dWeek }[f.signal] ?? d.dRef;
       if (primary == null || primary < minDisc) continue;
+      if (maxDisc != null && primary > maxDisc) continue;
       d.double = d.dRef != null && d.dSold != null && d.dRef >= minDisc && d.dSold >= 0.2;
       d.isNew = d.dNew != null && d.dNew >= 0.3;
+      d.ignored = state.ignored.has(`${d.id}:${d.variant}`);
+      if (d.ignored && !f.showIgnored) continue;
       if (f.hideWatched && watched.has(`${d.id}:${d.variant}`)) continue;
       if (f.onlyDouble && !d.double) continue;
       d.score = primary;
@@ -182,6 +236,7 @@ function computeDeals() {
 function renderDeals() {
   const tbody = $('#deals-table tbody');
   const results = computeDeals();
+  state.results = results;
   const shown = results.slice(0, state.visible);
   const watched = new Set(state.watchlist.map((w) => `${w.id}:${w.variant}`));
   const f = state.filters;
@@ -191,32 +246,75 @@ function renderDeals() {
   const hidden = results.hiddenImplausible ? ` · ${results.hiddenImplausible.toLocaleString('nl-NL')} onwaarschijnlijke verborgen` : '';
   const histDays = state.meta?.history?.dates?.length || 0;
   const histNote = f.signal === 'new' && histDays < 2 ? ' · Historie start bij de volgende price guide (morgen ~02:48); dit signaal heeft minstens 2 dagen nodig.' : '';
+  const range = f.maxDisc === '' || f.maxDisc == null ? `≥ ${f.minDisc} %` : `${f.minDisc}–${f.maxDisc} %`;
   $('#deals-summary').textContent = results.length
-    ? `${results.length.toLocaleString('nl-NL')} treffers · ${signalText} · trend ≥ ${fmtEur(Number(f.minTrend) || 0)} · minstens ${f.minDisc} % eronder${f.exp ? ` · ${expLabel(Number(f.exp))}` : ''}${hidden} · prijzen van ${guideDate}. "Laagste" is de goedkoopste listing in élke conditie en taal en ligt structureel onder de referentie; zie Uitleg.`
+    ? `${results.length.toLocaleString('nl-NL')} treffers · ${signalText} · trend ≥ ${fmtEur(Number(f.minTrend) || 0)} · ${range} eronder${f.exp ? ` · ${expLabel(Number(f.exp))}` : ''}${hidden} · prijzen van ${guideDate}. Dit is een shortlist, geen koopjeslijst: "laagste" is de goedkoopste listing in élke conditie en taal, zonder garantie dat die nog staat of zichtbaar is. Zie Uitleg voor de test en de koopworkflow.`
     : `Geen treffers met deze filters.${hidden}${histNote}`;
   $$('#deals-table th[data-sort]').forEach((th) => th.classList.toggle('sorted', th.dataset.sort === f.sort));
+  $('#filters-desc').textContent = `${signalText.split(':')[0]} · ${f.minDisc}–${f.maxDisc || '∞'} % · trend ≥ €${f.minTrend}`;
   tbody.replaceChildren(...shown.map((d) => {
     const tr = document.createElement('tr');
+    if (d.ignored) tr.classList.add('ignored');
     const key = `${d.id}:${d.variant}`;
     tr.innerHTML = `
-      <td class="name">${nameHtml(d.name)}${d.variant === 'h' ? '<span class="badge accent">holo</span>' : ''}${d.isNew ? `<span class="badge good" title="Laagste lag de vorige 7 dagen nooit onder ${fmtEur(d.prevLow)}">nieuw laag</span>` : ''}${d.double ? '<span class="badge good">dubbel</span>' : ''}${d.plausible ? '' : `<span class="badge warn" title="${escapeHtml(d.reasons.join('; '))}">onwaarschijnlijk</span>`}</td>
-      <td><span class="exp">${escapeHtml(expLabel(d.exp))}</span></td>
+      <td class="name">${nameHtml(d.name)}${d.variant === 'h' ? '<span class="badge accent">holo</span>' : ''}${d.isNew ? `<span class="badge good" title="Laagste lag de vorige 7 dagen nooit onder ${fmtEur(d.prevLow)}">nieuw laag</span>` : ''}${d.double ? '<span class="badge good">dubbel</span>' : ''}${d.plausible ? '' : `<span class="badge warn" title="${escapeHtml(d.reasons.join('; '))}">onwaarschijnlijk</span>`}<span class="set-inline">${escapeHtml(expLabel(d.exp))}</span></td>
+      <td class="opt"><span class="exp">${escapeHtml(expLabel(d.exp))}</span></td>
       <td class="num">${fmtEur(d.low)}</td>
-      <td class="num">${fmtEur(d.prevLow)}</td>
-      <td class="num">${fmtEur(d.trend)}</td>
-      <td class="num">${fmtEur(d.avg1)}</td>
+      <td class="num opt">${fmtEur(d.prevLow)}</td>
+      <td class="num opt">${fmtEur(d.trend)}</td>
+      <td class="num opt">${fmtEur(d.avg1)}</td>
       <td class="num">${fmtEur(d.avg7)}</td>
-      <td class="num">${fmtEur(d.avg30)}</td>
-      <td class="num">${fmtEur(d.gap)}</td>
+      <td class="num opt">${fmtEur(d.avg30)}</td>
+      <td class="num opt">${fmtEur(d.gap)}</td>
       <td class="num"><span class="disc${d.score >= 0.5 ? ' strong' : ''}">${fmtPct(d.score)}</span></td>
       <td class="actions">${linksHtml(d.name, d.exp)}
-          <button type="button" data-add="${d.id}" data-variant="${d.variant}" ${watched.has(key) ? 'disabled' : ''}>${watched.has(key) ? 'op watchlist' : '+ watchlist'}</button></td>`;
+          <button type="button" data-add="${d.id}" data-variant="${d.variant}" ${watched.has(key) ? 'disabled' : ''}>${watched.has(key) ? 'op watchlist' : '+ watchlist'}</button>
+          <button type="button" data-ignore="${d.id}" data-variant="${d.variant}" title="${d.ignored ? 'Weer tonen' : 'Verberg deze kaart voortaan'}">${d.ignored ? 'toon weer' : 'negeer'}</button></td>`;
     return tr;
   }));
+  renderToday();
   if (!shown.length) { const tr = document.createElement('tr'); tr.innerHTML = '<td colspan="11" class="empty">Niets gevonden. Verlaag de minimale trend of het minimale verschil, of kies een ander signaal of een andere set.</td>'; tbody.replaceChildren(tr); }
   $('#deals-more').hidden = results.length <= state.visible;
 }
+/* "Vandaag": nieuwe dalingen en watchlist-treffers in één oogopslag. */
+let todayToken = 0;
+async function renderToday() {
+  const box = $('#today'); if (!box || !state.deals.length) return;
+  const token = ++todayToken;
+  const days = state.meta?.history?.dates?.length || 0;
+  const news = [];
+  for (const row of state.deals) for (const v of ['n', 'h']) {
+    const d = evaluate(row, v, 'avg7');
+    if (d.plausible && d.trend != null && d.trend >= 10 && d.dNew != null && d.dNew >= 0.3 && d.avg7 && d.low <= 0.75 * d.avg7 && !state.ignored.has(`${d.id}:${d.variant}`)) news.push(d);
+  }
+  news.sort((a, b) => (b.avg7 - b.low) - (a.avg7 - a.low));
+  const hits = [];
+  if (state.watchlist.length) {
+    await ensureShardsFor(state.watchlist.map((w) => w.id));
+    if (token !== todayToken) return;
+    for (const w of state.watchlist) { const p = pricesFor(w.id, w.variant); if (p && p.low != null && w.max != null && p.low <= w.max) hits.push({ w, p }); }
+  }
+  const li = (d) => `<li>${nameHtml(d.name)}${d.variant === 'h' ? ' <span class="badge accent">holo</span>' : ''} <span class="exp">${escapeHtml(expLabel(d.exp))}</span> · ${fmtEur(d.low)} <span class="exp">was ≥ ${fmtEur(d.prevLow)}, 7d-gem. ${fmtEur(d.avg7)}</span> ${linksHtml(d.name, d.exp)}</li>`;
+  box.hidden = false;
+  box.innerHTML = `<div class="card-body">
+    <div><h2>Nieuw laag sinds gisteren</h2>${days < 2
+      ? `<p class="msg">Historie: ${days} dag. Vanaf de tweede price guide (morgen ~03:00) verschijnen hier kaarten waarvan de laagste listing duidelijk onder die van de vorige 7 dagen zakte.</p>`
+      : news.length ? `<ul>${news.slice(0, 8).map(li).join('')}</ul>${news.length > 8 ? `<p class="msg">${news.length - 8} meer via signaal "Nieuw laag".</p>` : ''}` : '<p class="msg">Geen nieuwe dalingen vandaag.</p>'}</div>
+    <div><h2>Watchlist onder je max</h2>${state.watchlist.length
+      ? hits.length ? `<ul>${hits.map(({ w, p }) => `<li>${nameHtml(w.name)} <span class="exp">${escapeHtml(expLabel(w.exp))}</span> · ${fmtEur(p.low)} ≤ ${fmtEur(w.max)} ${linksHtml(w.name, w.exp)}</li>`).join('')}</ul>` : '<p class="msg">Geen watchlist-kaarten onder je maximum.</p>'
+      : '<p class="msg">Nog geen watchlist. Voeg kaarten toe met "+ watchlist".</p>'}</div>
+  </div>`;
+}
 function onDealsClick(ev) {
+  const ign = ev.target.closest('button[data-ignore]');
+  if (ign) {
+    const key = `${ign.dataset.ignore}:${ign.dataset.variant}`;
+    if (state.ignored.has(key)) state.ignored.delete(key); else state.ignored.add(key);
+    save(LS.ignored, [...state.ignored]);
+    $('#ignored-count').textContent = String(state.ignored.size);
+    renderDeals();
+    return;
+  }
   const btn = ev.target.closest('button[data-add]'); if (!btn) return;
   const id = Number(btn.dataset.add);
   const row = state.deals.find((r) => r[0] === id); if (!row) return;
@@ -241,12 +339,29 @@ async function ensureIndex() {
   $('#wl-msg').textContent = '';
   return state.index;
 }
+async function ensureHistory() {
+  if (state.history) return state.history;
+  try { state.history = await fetchJson('data/history.json'); } catch { state.history = { dates: [], n: {}, h: {} }; }
+  return state.history;
+}
+function sparkline(arr) {
+  const vals = (arr || []).map((v) => (v == null ? null : Number(v)));
+  const present = vals.filter((v) => v != null);
+  if (present.length < 2) return '<span class="exp">–</span>';
+  const min = Math.min(...present), max = Math.max(...present);
+  const w = 96, h = 24, n = vals.length;
+  const x = (i) => (n === 1 ? w / 2 : (i / (n - 1)) * (w - 4) + 2);
+  const y = (v) => (max === min ? h / 2 : h - 3 - ((v - min) / (max - min)) * (h - 6));
+  const pts = vals.map((v, i) => (v == null ? null : `${x(i).toFixed(1)},${y(v).toFixed(1)}`)).filter(Boolean).join(' ');
+  const last = vals.length - 1; const lv = vals[last];
+  return `<svg class="spark" viewBox="0 0 ${w} ${h}" aria-label="laagste per dag"><title>${present.map((v) => fmtEur(v)).join(' → ')}</title><polyline points="${pts}"/>${lv != null ? `<circle cx="${x(last).toFixed(1)}" cy="${y(lv).toFixed(1)}" r="2.2"/>` : ''}</svg>`;
+}
 async function renderWatchlist() {
   const tbody = $('#wl-table tbody');
   const list = state.watchlist;
   $('#wl-count').textContent = String(list.length);
-  if (!list.length) { const tr = document.createElement('tr'); tr.innerHTML = '<td colspan="9" class="empty">Nog leeg. Zoek hierboven een kaart of klik "+ watchlist" bij een deal.</td>'; tbody.replaceChildren(tr); $('#wl-summary').textContent = ''; return; }
-  await ensureShardsFor(list.map((w) => w.id));
+  if (!list.length) { const tr = document.createElement('tr'); tr.innerHTML = '<td colspan="11" class="empty">Nog leeg. Zoek hierboven een kaart of klik "+ watchlist" bij een deal.</td>'; tbody.replaceChildren(tr); $('#wl-summary').textContent = ''; return; }
+  await Promise.all([ensureShardsFor(list.map((w) => w.id)), ensureHistory()]);
   const f = state.wlFilters;
   const q = (f.q || '').toLowerCase();
   let rows = list.map((w, i) => { const p = pricesFor(w.id, w.variant); const hit = Boolean(p && p.low != null && w.max != null && p.low <= w.max); return { w, i, p, hit }; });
@@ -271,14 +386,18 @@ async function renderWatchlist() {
       else if (hit) status = `<span class="badge good">${fmtPct(disc(p.low, w.max))} onder max</span>`;
       else status = `<span class="badge warn">${fmtPct(-disc(w.max, p.low))} boven max</span>`;
     }
+    const suggest = suggestedBuyPrice(p?.avg7);
+    const hist = state.history?.[w.variant === 'h' ? 'h' : 'n']?.[w.id];
     tr.innerHTML = `
-      <td class="name">${nameHtml(w.name)}</td>
-      <td><span class="exp">${escapeHtml(expLabel(w.exp))}</span></td>
+      <td class="name">${nameHtml(w.name)}<span class="set-inline">${escapeHtml(expLabel(w.exp))}</span></td>
+      <td class="opt"><span class="exp">${escapeHtml(expLabel(w.exp))}</span></td>
       <td><select class="variant" data-i="${i}"><option value="n"${w.variant === 'n' ? ' selected' : ''}>Normaal</option><option value="h"${w.variant === 'h' ? ' selected' : ''}>Holo</option></select></td>
       <td class="num"><input class="max" type="number" min="0" step="0.01" inputmode="decimal" data-i="${i}" value="${w.max ?? ''}" placeholder="max"></td>
+      <td class="num">${suggest == null ? '–' : `<button type="button" data-suggest="${i}" data-value="${suggest}" title="Zet max op 75 % van het 7d-verkoopgemiddelde">${fmtEur(suggest)}</button>`}</td>
       <td class="num">${fmtEur(p?.low)}</td>
-      <td class="num">${fmtEur(p?.trend)}</td>
-      <td class="num">${fmtEur(p?.avg7)}</td>
+      <td class="opt">${sparkline(hist)}</td>
+      <td class="num opt">${fmtEur(p?.trend)}</td>
+      <td class="num opt">${fmtEur(p?.avg7)}</td>
       <td>${status}</td>
       <td class="actions">${linksHtml(w.name, w.exp)} <button type="button" data-remove="${i}" title="Verwijderen">✕</button></td>`;
     return tr;
@@ -294,7 +413,12 @@ function initWatchlist() {
   };
   table.addEventListener('input', onChange);
   table.addEventListener('change', onChange);
-  table.addEventListener('click', (ev) => { const btn = ev.target.closest('button[data-remove]'); if (!btn) return; state.watchlist.splice(Number(btn.dataset.remove), 1); saveWatchlist(); renderWatchlist(); renderDeals(); });
+  table.addEventListener('click', (ev) => {
+    const sug = ev.target.closest('button[data-suggest]');
+    if (sug) { const w = state.watchlist[Number(sug.dataset.suggest)]; if (w) { w.max = Number(sug.dataset.value); saveWatchlist(); renderWatchlist(); } return; }
+    const btn = ev.target.closest('button[data-remove]'); if (!btn) return;
+    state.watchlist.splice(Number(btn.dataset.remove), 1); saveWatchlist(); renderWatchlist(); renderDeals();
+  });
 
   const input = $('#wl-search'); const ul = $('#wl-results'); let timer = null;
   input.addEventListener('input', () => {
@@ -319,9 +443,15 @@ function initWatchlist() {
 
   const io = $('#wl-io'); const msg = $('#wl-msg');
   $('#wl-copy-names').addEventListener('click', async () => {
-    const text = state.watchlist.map((w) => cleanName(w.name)).join('\n');
-    try { await navigator.clipboard.writeText(text); msg.textContent = `${state.watchlist.length} namen gekopieerd. Plak ze in je Cardmarket wants list en zet daar Buy price + Email Alarm.`; }
-    catch { io.hidden = false; io.value = text; msg.textContent = 'Kopieer de namen hieronder handmatig.'; }
+    await ensureShardsFor(state.watchlist.map((w) => w.id));
+    const lines = state.watchlist.map((w) => {
+      const p = pricesFor(w.id, w.variant);
+      const buy = w.max ?? suggestedBuyPrice(p?.avg7);
+      return `${cleanName(w.name)}\t${expLabel(w.exp)}\t${w.variant === 'h' ? 'reverse holo' : 'normaal'}\tkoopprijs ${buy == null ? '?' : fmtEur(buy)}${w.max == null ? ' (voorstel: 75 % van 7d-gem.)' : ''}`;
+    });
+    const text = lines.join('\n');
+    try { await navigator.clipboard.writeText(text); msg.textContent = `${state.watchlist.length} regels gekopieerd (naam, set, variant, koopprijs). Zet ze in je Cardmarket wants list met taal Engels, minimale conditie en Email Alarm; zie Uitleg.`; }
+    catch { io.hidden = false; io.value = text; msg.textContent = 'Kopieer de regels hieronder handmatig.'; }
   });
   $('#wl-export').addEventListener('click', () => { io.hidden = false; io.value = JSON.stringify(state.watchlist, null, 2); io.select(); msg.textContent = 'Bewaar deze JSON als back-up.'; });
   $('#wl-import').addEventListener('click', () => {
@@ -529,14 +659,14 @@ function renderLive() {
     const tr = document.createElement('tr'); if (l.watch && l.watch.max != null && l.price <= l.watch.max) tr.classList.add('hit');
     const key = `${l.cmId}:${l.variant ? 'h' : 'n'}`;
     tr.innerHTML = `
-      <td class="name">${nameHtml(l.cmName || l.name)}${l.variant ? '<span class="badge accent">holo</span>' : ''}${l.watch ? '<span class="badge good">watchlist</span>' : ''}${l.bundle > 1 ? `<span class="badge">×${l.bundle}</span>` : ''}</td>
-      <td><span class="exp">${escapeHtml(l.expansion?.name || expLabel(l.cmExp))}</span></td>
+      <td class="name">${nameHtml(l.cmName || l.name)}${l.variant ? '<span class="badge accent">holo</span>' : ''}${l.watch ? '<span class="badge good">watchlist</span>' : ''}${l.bundle > 1 ? `<span class="badge">×${l.bundle}</span>` : ''}<span class="set-inline">${escapeHtml(l.expansion?.name || expLabel(l.cmExp))} · ${escapeHtml((l.language || '?').toUpperCase())}</span></td>
+      <td class="opt"><span class="exp">${escapeHtml(l.expansion?.name || expLabel(l.cmExp))}</span></td>
       <td>${escapeHtml(l.condition || '?')}</td>
-      <td>${escapeHtml((l.language || '?').toUpperCase())}</td>
+      <td class="opt">${escapeHtml((l.language || '?').toUpperCase())}</td>
       <td>${escapeHtml(l.seller.username)} <span class="exp">${escapeHtml(l.seller.country)}</span>${l.seller.hub ? '<span class="badge accent">Zero</span>' : ''}${l.seller.max24h != null ? `<span class="exp"> max ${l.seller.max24h}/24u</span>` : ''}</td>
       <td class="num">${fmtEur(l.price)}${l.quantity > 1 ? `<span class="exp"> ×${l.quantity}</span>` : ''}</td>
-      <td class="num">${fmtEur(l.landed)}</td>
-      <td class="num">${fmtEur(ref)}</td>
+      <td class="num opt">${fmtEur(l.landed)}</td>
+      <td class="num opt">${fmtEur(ref)}</td>
       <td class="num"><span class="disc${d != null && d >= 0.4 ? ' strong' : ''}">${fmtPct(d)}</span></td>
       <td class="num">${margin == null ? '–' : `<span class="${margin > 0 ? 'pos' : 'neg'}">${fmtEur(margin)}</span>`}</td>
       <td class="actions"><a href="${cardtraderUrl(l.blueprintId)}" target="_blank" rel="noopener">CardTrader ↗</a>
