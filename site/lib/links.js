@@ -37,6 +37,18 @@ export function cardmarketSearchUrl(game, name) {
 
 export const cardtraderUrl = (blueprintId) => `https://www.cardtrader.com/en/cards/${blueprintId}`;
 
+/**
+ * PriceCharting (graded prijzen: Ungraded, Grade 7–9.5, PSA 10; in USD, eBay-verkopen). Alleen als
+ * link: hun data mag zonder betaald abonnement niet automatisch opgehaald worden, en ook mét abonnement
+ * niet in een voor derden bereikbare app getoond worden. De zoekpagina neemt naam + set; het
+ * kaartnummer (dat wij niet hebben) kiest de gebruiker daar zelf.
+ */
+export function pricechartingUrl(name, setName) {
+  const q = [splitName(name).base, setName && !/^Set \d+/.test(setName) ? setName : ''].filter(Boolean).join(' ')
+    .normalize('NFD').replace(/[̀-ͯ]/g, '').replace(/[^A-Za-z0-9 ]+/g, ' ').trim();
+  return `https://www.pricecharting.com/search-products?type=prices&q=${encodeURIComponent(`pokemon ${q}`)}`;
+}
+
 /** Sets die op Cardmarket alleen in Aziatische talen bestaan (Japans, Koreaans, Chinees, Thai, Indonesisch). */
 const ASIAN_SET = /japan|korea|chinese|thai|indonesia|taiwan|asia|\bJP\b|\bKR\b|\bTC\b|\bSC\b|\bID\/TH\b/i;
 export function isAsianSetName(name) {

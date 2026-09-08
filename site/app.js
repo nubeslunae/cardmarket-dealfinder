@@ -3,7 +3,7 @@
 import {
   DEFAULT_SETTINGS, normalizeListing, passesFilters, landedCost, resaleMargin, adjustedReference, optimizeBasket,
 } from './lib/landed.js';
-import { splitName, cardmarketCardUrl, cardmarketSetUrl, cardmarketSearchUrl, cardtraderUrl, isAsianSetName, suggestedBuyPrice } from './lib/links.js';
+import { splitName, cardmarketCardUrl, cardmarketSetUrl, cardmarketSearchUrl, cardtraderUrl, isAsianSetName, suggestedBuyPrice, pricechartingUrl } from './lib/links.js';
 
 const LS = { filters: 'cmdf.filters', watchlist: 'cmdf.watchlist', wlFilters: 'cmdf.wlfilters', token: 'cmdf.ct.token', ctSettings: 'cmdf.ct.settings', liveFilters: 'cmdf.livefilters', ignored: 'cmdf.ignored' };
 const PAGE_SIZE = 200;
@@ -54,7 +54,7 @@ function nameHtml(name) {
   return `<strong>${escapeHtml(base)}</strong>${attacks.length ? ` <span class="attacks">${escapeHtml(attacks.join(' · '))}</span>` : ''}`;
 }
 function linksHtml(name, exp) {
-  return `<a href="${cardmarketCardUrl(gameSlug(), name)}" target="_blank" rel="noopener" title="Exacte kaart op Cardmarket, alle uitvoeringen">Kaart ↗</a> <a href="${cardmarketSetUrl(gameSlug(), name, exp)}" target="_blank" rel="noopener" title="Deze uitvoering: singles van deze set, gefilterd op naam">In set ↗</a>`;
+  return `<a href="${cardmarketCardUrl(gameSlug(), name)}" target="_blank" rel="noopener" title="Exacte kaart op Cardmarket, alle uitvoeringen">Kaart ↗</a> <a href="${cardmarketSetUrl(gameSlug(), name, exp)}" target="_blank" rel="noopener" title="Deze uitvoering: singles van deze set, gefilterd op naam">In set ↗</a> <a href="${pricechartingUrl(name, expLabel(exp))}" target="_blank" rel="noopener" title="PriceCharting: prijzen per grade (Ungraded, 7–9.5, PSA 10) in USD">PSA ↗</a>`;
 }
 
 async function fetchJson(path) {

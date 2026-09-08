@@ -21,6 +21,12 @@ test('urls', () => {
   assert.equal(cardmarketSetUrl('Pokemon', 'Weedle [Multiply]', 1585), 'https://www.cardmarket.com/en/Pokemon/Products/Singles?idExpansion=1585&searchString=Weedle');
 });
 
+test('pricechartingUrl: basisnaam + setnaam, zonder set-nummer-fallback', async () => {
+  const { pricechartingUrl } = await import('../site/lib/links.js');
+  assert.equal(pricechartingUrl('Charizard ex [Burning Darkness]', 'Obsidian Flames'), 'https://www.pricecharting.com/search-products?type=prices&q=pokemon%20Charizard%20ex%20Obsidian%20Flames');
+  assert.equal(pricechartingUrl("Rocket's Scyther [Shadow Images]", 'Set 4466'), 'https://www.pricecharting.com/search-products?type=prices&q=pokemon%20Rocket%20s%20Scyther');
+});
+
 test('isAsianSetName en suggestedBuyPrice', async () => {
   const { isAsianSetName, suggestedBuyPrice } = await import('../site/lib/links.js');
   assert.equal(isAsianSetName('White Flare JP'), true);
