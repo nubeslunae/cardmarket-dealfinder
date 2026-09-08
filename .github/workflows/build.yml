@@ -50,6 +50,13 @@ jobs:
         run: node scripts/cardtrader-sync.mjs
         env:
           CARDTRADER_TOKEN: ${{ secrets.CARDTRADER_TOKEN }}
+      - name: Telegram-digest (optioneel, alleen met secrets)
+        if: steps.build.outputs.changed == 'true'
+        run: node scripts/notify.mjs
+        env:
+          SITE_URL: https://nubeslunae.github.io/cardmarket-dealfinder
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
       - name: Pages op Actions-deploy zetten (neemt tijdelijke gh-pages-branch over)
         if: steps.build.outputs.changed == 'true'
         uses: actions/configure-pages@v5

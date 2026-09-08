@@ -48,7 +48,19 @@ Cardmarket-account gekoppeld.
   (25 goedkoopste aanbiedingen per kaart), sets scannen, en een **mandje-optimalisatie** die de
   goedkoopste combinatie van verkopers voor je watchlist berekent (hub gebundeld, losse verkoper alleen
   als de besparing de verzending dekt).
-- **Uitleg**: tijdstempels, tellingen, werking van Cardmarket's Email Alarm.
+- **Uitleg**: tijdstempels, tellingen, werking van Cardmarket's Email Alarm, de test voor onvindbare
+  listings en de koopworkflow.
+- **Extra's**: "Vandaag"-paneel (nieuwe dalingen + watchlist-treffers), negeerlijst, deelbare filter-URL
+  (`#deals?minDisc=30&…`), CSV-export, setzoekveld, koopprijs-voorstel (75 % van 7d-gem.) met
+  sparkline van de laatste 8 dagen, filter "verberg Aziatische sets", mobiele layout (inklapbare
+  filters, kernkolommen, thuisscherm-manifest).
+- **Telegram-digest** (optioneel): secrets `TELEGRAM_BOT_TOKEN` + `TELEGRAM_CHAT_ID` en een
+  `data/watchlist.json` (de JSON-export van de Watchlist-tab). `scripts/notify.mjs` stuurt na elke
+  nieuwe price guide watchlist-treffers en de sterkste nieuwe dalingen.
+
+Taal: de dagelijkse Cardmarket-bestanden bevatten geen taal per listing. "Alleen Engels" kun je
+afdwingen op de Live-tab (standaard aan) en in je Cardmarket wants list; op de Deals-tab kun je
+alleen sets verbergen die uitsluitend in Aziatische talen bestaan.
 
 ## Landed cost
 

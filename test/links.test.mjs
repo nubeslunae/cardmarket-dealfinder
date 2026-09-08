@@ -21,6 +21,20 @@ test('urls', () => {
   assert.equal(cardmarketSetUrl('Pokemon', 'Weedle [Multiply]', 1585), 'https://www.cardmarket.com/en/Pokemon/Products/Singles?idExpansion=1585&searchString=Weedle');
 });
 
+test('isAsianSetName en suggestedBuyPrice', async () => {
+  const { isAsianSetName, suggestedBuyPrice } = await import('../site/lib/links.js');
+  assert.equal(isAsianSetName('White Flare JP'), true);
+  assert.equal(isAsianSetName('M-P Thai Promos'), true);
+  assert.equal(isAsianSetName('Mega Evolution ID/TH'), true);
+  assert.equal(isAsianSetName('Obsidian Flames'), false);
+  assert.equal(isAsianSetName('Scarlet & Violet'), false);
+  assert.equal(isAsianSetName(null), false);
+  assert.equal(suggestedBuyPrice(10), 7.5);
+  assert.equal(suggestedBuyPrice(1.23), 0.9);
+  assert.equal(suggestedBuyPrice(0.02), 0.05);
+  assert.equal(suggestedBuyPrice(null), null);
+});
+
 test('parseExpansionOptions leest de idExpansion-keuzelijst', () => {
   const html = '<select name="idCategory"><option value="51">Single</option></select><select name="idExpansion" class="x"><option value="0">All</option><option value="1585" selected>Primal Clash</option><option value="6419">Stellar &amp; Lightning</option></select><select name="idRarity"><option value="7">Rare</option></select>';
   const m = parseExpansionOptions(html);

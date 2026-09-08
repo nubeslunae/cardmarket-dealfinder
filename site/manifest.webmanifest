@@ -1,0 +1,11 @@
+{
+  "name": "Cardmarket Deal Finder",
+  "short_name": "Deals",
+  "start_url": "./",
+  "display": "standalone",
+  "background_color": "#f6f5f2",
+  "theme_color": "#b3471c",
+  "icons": [
+    { "src": "icon.svg", "sizes": "any", "type": "image/svg+xml" }
+  ]
+}
