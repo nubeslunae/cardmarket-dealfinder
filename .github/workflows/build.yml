@@ -47,6 +47,11 @@ jobs:
         run: node scripts/cardtrader-sync.mjs
         env:
           CARDTRADER_TOKEN: ${{ secrets.CARDTRADER_TOKEN }}
+      - name: Pages op Actions-deploy zetten (neemt tijdelijke gh-pages-branch over)
+        if: steps.build.outputs.changed == 'true'
+        uses: actions/configure-pages@v5
+        with:
+          enablement: true
       - name: Upload site
         if: steps.build.outputs.changed == 'true'
         uses: actions/upload-pages-artifact@v3
