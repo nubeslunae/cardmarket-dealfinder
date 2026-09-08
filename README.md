@@ -30,9 +30,18 @@ Cardmarket-account gekoppeld.
 
 ## Tabs
 
-- **Deals**: marktbrede scan op de Cardmarket-data. Signalen: laagste listing vs trend, gisteren verkocht
-  vs 7d-gemiddelde, 7d vs 30d (dalend). Filters op trend- en prijsbereik, korting, set, variant
-  (normaal/holo), tekst; sorteren via dropdown of kolomkop.
+- **Deals**: marktbrede scan op de Cardmarket-data. Signalen: nieuw laag (t.o.v. de laagste van de
+  vorige 7 dagen, uit de dagelijkse historie), laagste onder referentie (7d-gem., 30d-gem. of trend),
+  gisteren verkocht onder 7d-gem., dalend. Filters op trend- en prijsbereik, percentage eronder, set,
+  variant (normaal/holo), tekst, plausibiliteit; sorteren via dropdown of kolomkop.
+
+  Let op wat de velden betekenen (gecontroleerd op gearchiveerde Cardmarket-productpagina's): `low` is
+  exact de "From"-prijs, dus de goedkoopste listing in élke conditie en taal, en Cardmarket's trend en
+  verkoopgemiddelden liggen structureel ver boven de goedkoopste listing (commons 10×, mid-range 2×).
+  "90 % onder trend" is daarom meestal geen koopje; het signaal *nieuw laag* meet als enige een echte
+  verandering. `data/history.json` bewaart 8 dagen `low` per product (vorige versie van de live site +
+  vandaag). Onwaarschijnlijke rijen (referenties > 3× uiteen, `low` < 10 % van trend of < €1) zijn
+  standaard verborgen.
 - **Watchlist**: kaarten met maximumprijs en variant; treffers op de dagelijkse Cardmarket-laagste;
   filter/sorteer; export van namen (voor Cardmarket wants list) en JSON (back-up).
 - **Live · CardTrader**: token opslaan, kosten en filters instellen, watchlist live checken
@@ -77,14 +86,20 @@ CardTrader-spel.
   Realtime Cardmarket-meldingen: gebruik hun eigen wants list met Buy price + Email Alarm.
 - `low` in de price guide telt alle condities en talen; een Cardmarket-deal vereist één klik controle.
   CardTrader-aanbiedingen hebben wél conditie en taal.
-- Setnamen komen uit de CardTrader-mapping; handmatige namen in `data/expansions.json`
-  (`{ "1585": "Naam" }`) winnen altijd.
+- Setnamen zitten niet in de Cardmarket-bestanden. `data/expansions.json` is een vaste seed (uit
+  Cardmarket's eigen set-keuzelijst), `scripts/cardmarket-expansions.mjs` vult dagelijks aan vanuit de
+  nieuwste archiefkopie van die keuzelijst (Internet Archive; Cardmarket zelf blokkeert datacenter-IP's),
+  en de CardTrader-sync vult de rest. Handmatige namen in de seed winnen altijd.
+- Links: **Kaart ↗** gaat naar Cardmarket's `Cards/<slug>`-route (slug = volledige catalogusnaam incl.
+  aanvalsnamen, bewezen via gearchiveerde URL's); **In set ↗** naar `Products/Singles?idExpansion=…&searchString=…`.
+- "Onwaarschijnlijke" deals (trend/7d/30d > 3× uiteen, laagste < 10 % van trend of < €1) zijn standaard
+  verborgen: dat zijn vrijwel altijd beschadigde of anderstalige exemplaren, of al verkocht.
 - GitHub schakelt cron-workflows uit na 60 dagen zonder repo-activiteit; GitHub mailt hierover,
   opnieuw inschakelen via Actions → Build & deploy → Enable.
 - Publieke repo (vereist voor gratis Pages). Er staat geen persoonlijke data in; de watchlist en het
   token leven alleen in je browser. Let op: alle `nubeslunae.github.io`-sites delen dezelfde origin
   en dus dezelfde `localStorage`.
-- Cardmarket-links zijn zoeklinks op naam; CardTrader-links gaan naar `/en/cards/<blueprint-id>`.
+- CardTrader-links gaan naar `/en/cards/<blueprint-id>`.
 - Geen auto-buy. De CardTrader-cart-API wordt bewust niet aangeroepen.
 
 Ontwerp: `docs/superpowers/specs/2026-09-08-cardmarket-dealfinder-design.md`.

@@ -42,6 +42,9 @@ jobs:
           GAME_ID: '6'
           SITE_URL: https://nubeslunae.github.io/cardmarket-dealfinder
           FORCE: ${{ (github.event_name == 'push' || inputs.force) && 'true' || '' }}
+      - name: Setnamen aanvullen uit Cardmarket-keuzelijst (via Internet Archive, faalt zacht)
+        if: steps.build.outputs.changed == 'true'
+        run: node scripts/cardmarket-expansions.mjs
       - name: CardTrader-koppeling (optioneel, alleen met secret)
         if: steps.build.outputs.changed == 'true'
         run: node scripts/cardtrader-sync.mjs

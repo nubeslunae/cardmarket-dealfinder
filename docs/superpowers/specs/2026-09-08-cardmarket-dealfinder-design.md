@@ -122,6 +122,19 @@ Orchestratie: HEAD-check, vergelijken met live `meta.json`, downloaden, berekene
 - Browser: ontbrekende shard of data toont een melding in plaats van een lege pagina; watchlist blijft
   bewaard.
 
+## Review na eerste gebruik (2026-09-08, avond)
+
+- **"100 %"-kortingen niet terug te vinden.** Analyse van 637 items met ≥90 % korting: vooral de duurste
+  vintage-kaarten (Lillie trend €5.661, laagste €100) waar `low` een beschadigd/anderstalig exemplaar is dat
+  bovendien snel weg is, plus 81 items met onderling tegenstrijdige referenties (trend/7d/30d > 3× uiteen).
+  Oplossing: plausibiliteitsvlag per rij en filter "verberg onwaarschijnlijke" (standaard aan), uitleg-sectie.
+- **Directe links.** Cardmarket's `Cards/<slug>`-route neemt als slug de volledige catalogusnaam incl.
+  aanvalsnamen (bewezen via Wayback CDX). `Products/Singles?idExpansion=&searchString=` bestaat ook.
+  `site/lib/links.js` (getest) bouwt beide; naam wordt getoond als basisnaam + aanvallen in grijs.
+- **Setnamen.** Cardmarket's set-keuzelijst (idExpansion → naam) staat in gearchiveerde kopieën van de
+  zoekpagina. `data/expansions.json` is de seed (767 namen), `scripts/cardmarket-expansions.mjs` vult dagelijks
+  aan uit de nieuwste kopie. Alleen sets nieuwer dan de laatste archiefkopie blijven tijdelijk naamloos.
+
 ## Bekende beperkingen
 
 - Data is dagelijks; het dashboard is hooguit ~30 minuten na publicatie bijgewerkt.

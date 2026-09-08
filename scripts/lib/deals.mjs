@@ -9,7 +9,9 @@ export const DEALS_COLUMNS = [
   'id', 'name', 'exp',
   'low', 'trend', 'avg1', 'avg7', 'avg30',
   'hLow', 'hTrend', 'hAvg1', 'hAvg7', 'hAvg30',
+  'prevLow', 'hPrevLow', // laagste "laagste" van de voorgaande dagen (historie), null zonder historie
 ];
+export const HISTORY_DAYS = 8; // vandaag + 7 voorgaande dagen
 
 export const INDEX_COLUMNS = ['id', 'name', 'exp'];
 
@@ -67,13 +69,43 @@ export function discount(price, reference) {
   return 1 - price / reference;
 }
 
+/**
+ * Dagelijkse historie van "laagste" per product, zodat een nieuwe daling zichtbaar wordt.
+ * prev: { dates: ['YYYY-MM-DD', ...], n: { id: [low...] }, h: { id: [low...] } } (arrays uitgelijnd met dates).
+ * Zelfde datum nogmaals → ongewijzigd. Alleen producten met trend ≥ minTrend worden bijgehouden.
+ */
+export function updateHistory(prev, joined, date, { days = HISTORY_DAYS, minTrend = 3 } = {}) {
+  const base = prev && Array.isArray(prev.dates) && prev.n && prev.h ? prev : { dates: [], n: {}, h: {} };
+  if (base.dates.includes(date)) return base;
+  const dates = [...base.dates, date].slice(-days);
+  const pad = (arr) => { const a = Array.isArray(arr) ? [...arr] : []; while (a.length < base.dates.length) a.unshift(null); return a.slice(-base.dates.length); };
+  const n = {}; const h = {};
+  for (const p of joined) {
+    if (Math.max(p.n[1] ?? 0, p.h[1] ?? 0) < minTrend) continue;
+    const an = [...pad(base.n[p.id]), p.n[0]].slice(-days);
+    const ah = [...pad(base.h[p.id]), p.h[0]].slice(-days);
+    if (an.some((v) => v != null)) n[p.id] = an;
+    if (ah.some((v) => v != null)) h[p.id] = ah;
+  }
+  return { dates, n, h };
+}
+
+/** Laagste waarde van de voorgaande dagen (alles behalve de laatste), null als er geen historie is. */
+export function priorMin(arr) {
+  if (!Array.isArray(arr) || arr.length < 2) return null;
+  const prev = arr.slice(0, -1).filter((v) => v != null);
+  return prev.length ? Math.min(...prev) : null;
+}
+
 /** Rijen voor de deals-tabel: alleen producten waarvan normaal óf holo trend ≥ minTrend. */
-export function buildDeals(joined, { minTrend = 3 } = {}) {
+export function buildDeals(joined, { minTrend = 3, history = null } = {}) {
   const rows = [];
   for (const p of joined) {
     const best = Math.max(p.n[1] ?? 0, p.h[1] ?? 0);
     if (best < minTrend) continue;
-    rows.push([p.id, p.name, p.exp, ...p.n, ...p.h]);
+    const prevLow = history ? priorMin(history.n[p.id]) : null;
+    const hPrevLow = history ? priorMin(history.h[p.id]) : null;
+    rows.push([p.id, p.name, p.exp, ...p.n, ...p.h, prevLow, hPrevLow]);
   }
   rows.sort((a, b) => a[0] - b[0]);
   return rows;

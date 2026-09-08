@@ -1,8 +1,9 @@
 /* Cardmarket Deal Finder — dashboard (ES-module, geen build-step, geen dependencies).
    Data: ./data/*.json uit scripts/build.mjs; live: CardTrader-API rechtstreeks vanuit de browser. */
 import {
-  DEFAULT_SETTINGS, CONDITIONS, normalizeListing, passesFilters, landedCost, resaleMargin, adjustedReference, optimizeBasket,
+  DEFAULT_SETTINGS, normalizeListing, passesFilters, landedCost, resaleMargin, adjustedReference, optimizeBasket,
 } from './lib/landed.js';
+import { splitName, cardmarketCardUrl, cardmarketSetUrl, cardmarketSearchUrl, cardtraderUrl } from './lib/links.js';
 
 const LS = { filters: 'cmdf.filters', watchlist: 'cmdf.watchlist', wlFilters: 'cmdf.wlfilters', token: 'cmdf.ct.token', ctSettings: 'cmdf.ct.settings', liveFilters: 'cmdf.livefilters' };
 const PAGE_SIZE = 200;
@@ -44,11 +45,16 @@ function expLabel(expId) {
   if (e.name) return e.name;
   return e.first ? `Set ${e.id} · sinds ${e.first.slice(0, 7)}` : `Set ${e.id}`;
 }
-function cardmarketUrl(name) {
-  const slug = state.meta?.game?.slug || 'Pokemon';
-  return `https://www.cardmarket.com/en/${slug}/Products/Search?searchString=${encodeURIComponent(cleanName(name))}`;
+const gameSlug = () => state.meta?.game?.slug || 'Pokemon';
+const cardmarketUrl = (name) => cardmarketSearchUrl(gameSlug(), name);
+/** Naam als "<b>Charizard ex</b> <span>Burning Darkness</span>" zodat de exacte uitvoering leesbaar is. */
+function nameHtml(name) {
+  const { base, attacks } = splitName(name);
+  return `<strong>${escapeHtml(base)}</strong>${attacks.length ? ` <span class="attacks">${escapeHtml(attacks.join(' · '))}</span>` : ''}`;
 }
-const cardtraderUrl = (blueprintId) => `https://www.cardtrader.com/en/cards/${blueprintId}`;
+function linksHtml(name, exp) {
+  return `<a href="${cardmarketCardUrl(gameSlug(), name)}" target="_blank" rel="noopener" title="Exacte kaart op Cardmarket, alle uitvoeringen">Kaart ↗</a> <a href="${cardmarketSetUrl(gameSlug(), name, exp)}" target="_blank" rel="noopener" title="Deze uitvoering: singles van deze set, gefilterd op naam">In set ↗</a>`;
+}
 
 async function fetchJson(path) {
   const r = await fetch(path, { cache: 'no-cache' });
@@ -98,7 +104,8 @@ function showTab(name) {
 }
 
 /* ---------- deals ---------- */
-const DEAL_DEFAULTS = { signal: 'low', variant: 'n', minTrend: 10, maxTrend: '', minLow: '', maxLow: '', minDisc: 30, exp: '', sort: 'score', q: '', onlyDouble: false, hideWatched: false };
+const DEAL_DEFAULTS = { signal: 'low', ref: 'avg7', variant: 'n', minTrend: 10, maxTrend: '', minLow: '', maxLow: '', minDisc: 30, exp: '', sort: 'score', q: '', onlyDouble: false, hideWatched: false, plausibleOnly: true };
+const PREV_LOW_INDEX = { n: 13, h: 14 };
 function initDeals() {
   const form = $('#filters');
   bindForm(form, state.filters, DEAL_DEFAULTS, () => { save(LS.filters, state.filters); state.visible = PAGE_SIZE; renderDeals(); });
@@ -113,10 +120,24 @@ function fillExpansionSelect() {
   sel.replaceChildren(new Option('alle sets', ''), ...opts);
   sel.value = state.filters.exp || '';
 }
-function evaluate(row, variant) {
+function evaluate(row, variant, ref = state.filters.ref || 'avg7') {
   const o = OFFSET[variant];
   const [low, trend, avg1, avg7, avg30] = row.slice(o, o + 5);
-  return { id: row[0], name: row[1], exp: row[2], variant, low, trend, avg1, avg7, avg30, dLow: disc(low, trend), dSold: disc(avg1, avg7), dWeek: disc(avg7, avg30), gap: low != null && trend != null ? trend - low : null };
+  const prevLow = row[PREV_LOW_INDEX[variant]] ?? null;
+  const refVal = { trend, avg7, avg30 }[ref] ?? avg7;
+  // Plausibiliteit: referentiewaarden (trend, 7d, 30d) moeten elkaar bevestigen, en een "laagste" onder
+  // 10 % van de trend of onder €1 is vrijwel altijd een beschadigd of anderstalig exemplaar (of al weg).
+  const refs = [trend, avg7, avg30].filter((v) => v != null && v > 0);
+  const spread = refs.length >= 2 ? Math.max(...refs) / Math.min(...refs) : 1;
+  const reasons = [];
+  if (spread > 3) reasons.push('referentie inconsistent (trend/7d/30d > 3× uiteen)');
+  if (low != null && trend != null && low < 0.1 * trend) reasons.push('laagste < 10 % van trend: waarschijnlijk andere conditie/taal');
+  if (low != null && low < 1) reasons.push('laagste onder €1');
+  return {
+    id: row[0], name: row[1], exp: row[2], variant, low, trend, avg1, avg7, avg30, prevLow, refVal,
+    dRef: disc(low, refVal), dNew: disc(low, prevLow), dSold: disc(avg1, avg7), dWeek: disc(avg7, avg30),
+    gap: low != null && refVal != null ? refVal - low : null, plausible: reasons.length === 0, reasons,
+  };
 }
 function computeDeals() {
   const f = state.filters;
@@ -127,17 +148,20 @@ function computeDeals() {
   const q = (f.q || '').toLowerCase();
   const watched = new Set(state.watchlist.map((w) => `${w.id}:${w.variant}`));
   const out = [];
+  let hiddenImplausible = 0;
   for (const row of state.deals) {
     if (exp != null && row[2] !== exp) continue;
     if (q && !row[1].toLowerCase().includes(q) && String(row[2]) !== q) continue;
     for (const v of variants) {
       const d = evaluate(row, v);
       if (d.trend == null || d.trend < minTrend || (maxTrend != null && d.trend > maxTrend)) continue;
+      if (f.plausibleOnly && !d.plausible) { hiddenImplausible += 1; continue; }
       if (minLow != null && (d.low == null || d.low < minLow)) continue;
       if (maxLow != null && (d.low == null || d.low > maxLow)) continue;
-      const primary = f.signal === 'low' ? d.dLow : f.signal === 'sold' ? d.dSold : d.dWeek;
+      const primary = { low: d.dRef, new: d.dNew, sold: d.dSold, week: d.dWeek }[f.signal] ?? d.dRef;
       if (primary == null || primary < minDisc) continue;
-      d.double = d.dLow != null && d.dSold != null && d.dLow >= minDisc && d.dSold >= 0.2;
+      d.double = d.dRef != null && d.dSold != null && d.dRef >= minDisc && d.dSold >= 0.2;
+      d.isNew = d.dNew != null && d.dNew >= 0.3;
       if (f.hideWatched && watched.has(`${d.id}:${d.variant}`)) continue;
       if (f.onlyDouble && !d.double) continue;
       d.score = primary;
@@ -152,6 +176,7 @@ function computeDeals() {
     name: (a, b) => a.name.localeCompare(b.name),
   };
   out.sort(sorters[f.sort] || sorters.score);
+  out.hiddenImplausible = hiddenImplausible;
   return out;
 }
 function renderDeals() {
@@ -160,29 +185,35 @@ function renderDeals() {
   const shown = results.slice(0, state.visible);
   const watched = new Set(state.watchlist.map((w) => `${w.id}:${w.variant}`));
   const f = state.filters;
-  const signalText = { low: 'laagste listing vs trend', sold: 'gisteren verkocht vs 7d-gem.', week: '7d-gem. vs 30d-gem.' }[f.signal];
+  const refText = { trend: 'trend', avg7: '7d-verkoopgemiddelde', avg30: '30d-verkoopgemiddelde' }[f.ref] || '7d-verkoopgemiddelde';
+  const signalText = { low: `laagste listing onder ${refText}`, new: 'nieuw laag: onder de laagste van de vorige 7 dagen', sold: 'gisteren verkocht onder 7d-gem.', week: '7d-gem. onder 30d-gem.' }[f.signal];
+  const guideDate = fmtDate(state.meta?.sources?.guide?.createdAt);
+  const hidden = results.hiddenImplausible ? ` · ${results.hiddenImplausible.toLocaleString('nl-NL')} onwaarschijnlijke verborgen` : '';
+  const histDays = state.meta?.history?.dates?.length || 0;
+  const histNote = f.signal === 'new' && histDays < 2 ? ' · Historie start bij de volgende price guide (morgen ~02:48); dit signaal heeft minstens 2 dagen nodig.' : '';
   $('#deals-summary').textContent = results.length
-    ? `${results.length.toLocaleString('nl-NL')} treffers · ${signalText} · trend ≥ ${fmtEur(Number(f.minTrend) || 0)} · korting ≥ ${f.minDisc} %${f.exp ? ` · ${expLabel(Number(f.exp))}` : ''}`
-    : 'Geen treffers met deze filters.';
+    ? `${results.length.toLocaleString('nl-NL')} treffers · ${signalText} · trend ≥ ${fmtEur(Number(f.minTrend) || 0)} · minstens ${f.minDisc} % eronder${f.exp ? ` · ${expLabel(Number(f.exp))}` : ''}${hidden} · prijzen van ${guideDate}. "Laagste" is de goedkoopste listing in élke conditie en taal en ligt structureel onder de referentie; zie Uitleg.`
+    : `Geen treffers met deze filters.${hidden}${histNote}`;
   $$('#deals-table th[data-sort]').forEach((th) => th.classList.toggle('sorted', th.dataset.sort === f.sort));
   tbody.replaceChildren(...shown.map((d) => {
     const tr = document.createElement('tr');
     const key = `${d.id}:${d.variant}`;
     tr.innerHTML = `
-      <td class="name">${escapeHtml(d.name)}${d.variant === 'h' ? '<span class="badge accent">holo</span>' : ''}${d.double ? '<span class="badge good">dubbel</span>' : ''}</td>
+      <td class="name">${nameHtml(d.name)}${d.variant === 'h' ? '<span class="badge accent">holo</span>' : ''}${d.isNew ? `<span class="badge good" title="Laagste lag de vorige 7 dagen nooit onder ${fmtEur(d.prevLow)}">nieuw laag</span>` : ''}${d.double ? '<span class="badge good">dubbel</span>' : ''}${d.plausible ? '' : `<span class="badge warn" title="${escapeHtml(d.reasons.join('; '))}">onwaarschijnlijk</span>`}</td>
       <td><span class="exp">${escapeHtml(expLabel(d.exp))}</span></td>
       <td class="num">${fmtEur(d.low)}</td>
+      <td class="num">${fmtEur(d.prevLow)}</td>
       <td class="num">${fmtEur(d.trend)}</td>
       <td class="num">${fmtEur(d.avg1)}</td>
       <td class="num">${fmtEur(d.avg7)}</td>
       <td class="num">${fmtEur(d.avg30)}</td>
       <td class="num">${fmtEur(d.gap)}</td>
       <td class="num"><span class="disc${d.score >= 0.5 ? ' strong' : ''}">${fmtPct(d.score)}</span></td>
-      <td class="actions"><a href="${cardmarketUrl(d.name)}" target="_blank" rel="noopener">Cardmarket ↗</a>
+      <td class="actions">${linksHtml(d.name, d.exp)}
           <button type="button" data-add="${d.id}" data-variant="${d.variant}" ${watched.has(key) ? 'disabled' : ''}>${watched.has(key) ? 'op watchlist' : '+ watchlist'}</button></td>`;
     return tr;
   }));
-  if (!shown.length) { const tr = document.createElement('tr'); tr.innerHTML = '<td colspan="10" class="empty">Niets gevonden. Verlaag de minimale trend of korting, of kies een andere set.</td>'; tbody.replaceChildren(tr); }
+  if (!shown.length) { const tr = document.createElement('tr'); tr.innerHTML = '<td colspan="11" class="empty">Niets gevonden. Verlaag de minimale trend of het minimale verschil, of kies een ander signaal of een andere set.</td>'; tbody.replaceChildren(tr); }
   $('#deals-more').hidden = results.length <= state.visible;
 }
 function onDealsClick(ev) {
@@ -241,7 +272,7 @@ async function renderWatchlist() {
       else status = `<span class="badge warn">${fmtPct(-disc(w.max, p.low))} boven max</span>`;
     }
     tr.innerHTML = `
-      <td class="name">${escapeHtml(w.name)}</td>
+      <td class="name">${nameHtml(w.name)}</td>
       <td><span class="exp">${escapeHtml(expLabel(w.exp))}</span></td>
       <td><select class="variant" data-i="${i}"><option value="n"${w.variant === 'n' ? ' selected' : ''}>Normaal</option><option value="h"${w.variant === 'h' ? ' selected' : ''}>Holo</option></select></td>
       <td class="num"><input class="max" type="number" min="0" step="0.01" inputmode="decimal" data-i="${i}" value="${w.max ?? ''}" placeholder="max"></td>
@@ -249,7 +280,7 @@ async function renderWatchlist() {
       <td class="num">${fmtEur(p?.trend)}</td>
       <td class="num">${fmtEur(p?.avg7)}</td>
       <td>${status}</td>
-      <td class="actions"><a href="${cardmarketUrl(w.name)}" target="_blank" rel="noopener">Cardmarket ↗</a> <button type="button" data-remove="${i}" title="Verwijderen">✕</button></td>`;
+      <td class="actions">${linksHtml(w.name, w.exp)} <button type="button" data-remove="${i}" title="Verwijderen">✕</button></td>`;
     return tr;
   }));
 }
@@ -498,7 +529,7 @@ function renderLive() {
     const tr = document.createElement('tr'); if (l.watch && l.watch.max != null && l.price <= l.watch.max) tr.classList.add('hit');
     const key = `${l.cmId}:${l.variant ? 'h' : 'n'}`;
     tr.innerHTML = `
-      <td class="name">${escapeHtml(l.cmName || l.name)}${l.variant ? '<span class="badge accent">holo</span>' : ''}${l.watch ? '<span class="badge good">watchlist</span>' : ''}${l.bundle > 1 ? `<span class="badge">×${l.bundle}</span>` : ''}</td>
+      <td class="name">${nameHtml(l.cmName || l.name)}${l.variant ? '<span class="badge accent">holo</span>' : ''}${l.watch ? '<span class="badge good">watchlist</span>' : ''}${l.bundle > 1 ? `<span class="badge">×${l.bundle}</span>` : ''}</td>
       <td><span class="exp">${escapeHtml(l.expansion?.name || expLabel(l.cmExp))}</span></td>
       <td>${escapeHtml(l.condition || '?')}</td>
       <td>${escapeHtml((l.language || '?').toUpperCase())}</td>
@@ -509,7 +540,7 @@ function renderLive() {
       <td class="num"><span class="disc${d != null && d >= 0.4 ? ' strong' : ''}">${fmtPct(d)}</span></td>
       <td class="num">${margin == null ? '–' : `<span class="${margin > 0 ? 'pos' : 'neg'}">${fmtEur(margin)}</span>`}</td>
       <td class="actions"><a href="${cardtraderUrl(l.blueprintId)}" target="_blank" rel="noopener">CardTrader ↗</a>
-        ${l.cmId != null ? `<a href="${cardmarketUrl(l.cmName || l.name)}" target="_blank" rel="noopener">CM ↗</a> <button type="button" data-add-cm="${l.productId}" ${watched.has(key) ? 'disabled' : ''}>${watched.has(key) ? 'op watchlist' : '+ watchlist'}</button>` : ''}</td>`;
+        ${l.cmId != null ? `${linksHtml(l.cmName || l.name, l.cmExp)} <button type="button" data-add-cm="${l.productId}" ${watched.has(key) ? 'disabled' : ''}>${watched.has(key) ? 'op watchlist' : '+ watchlist'}</button>` : `<a href="${cardmarketUrl(l.name)}" target="_blank" rel="noopener">CM zoeken ↗</a>`}</td>`;
     return tr;
   }));
   if (!shown.length) { const tr = document.createElement('tr'); tr.innerHTML = '<td colspan="11" class="empty">Geen aanbiedingen binnen de filters. Verlaag de minimale korting of referentie.</td>'; tbody.replaceChildren(tr); }

@@ -15,8 +15,8 @@ import { readFile, writeFile, mkdir, rm, appendFile } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import path from 'node:path';
 import {
-  joinProducts, buildDeals, buildIndex, buildShards, buildExpansions,
-  DEALS_COLUMNS, INDEX_COLUMNS,
+  joinProducts, buildDeals, buildIndex, buildShards, buildExpansions, updateHistory,
+  DEALS_COLUMNS, INDEX_COLUMNS, HISTORY_DAYS,
 } from './lib/deals.mjs';
 
 const GAME_ID = process.env.GAME_ID || '6';
@@ -43,16 +43,17 @@ async function headInfo(url) {
   return { etag: r.headers.get('etag'), lastModified: r.headers.get('last-modified') };
 }
 
-async function liveMeta() {
+async function liveJson(file) {
   if (!SITE_URL) return null;
   try {
-    const r = await fetch(`${SITE_URL}/data/meta.json`, { cache: 'no-store' });
+    const r = await fetch(`${SITE_URL}/data/${file}`, { cache: 'no-store' });
     if (!r.ok) return null;
     return await r.json();
   } catch {
     return null;
   }
 }
+const liveMeta = () => liveJson('meta.json');
 
 async function loadJson(url, fileEnv) {
   const local = process.env[fileEnv];
@@ -101,7 +102,13 @@ async function main() {
   }
 
   const joined = joinProducts(productsDoc.products, guideDoc.priceGuides);
-  const deals = buildDeals(joined, { minTrend: DEALS_MIN_TREND });
+  // Historie van "laagste": de vorige versie staat op de live site; zelfde guide-datum voegt niets toe.
+  const guideDate = String(guideDoc.createdAt || new Date().toISOString()).slice(0, 10);
+  const prevHistory = process.env.HISTORY_FILE && existsSync(process.env.HISTORY_FILE)
+    ? JSON.parse(await readFile(process.env.HISTORY_FILE, 'utf8'))
+    : await liveJson('history.json');
+  const history = updateHistory(prevHistory, joined, guideDate, { days: HISTORY_DAYS, minTrend: DEALS_MIN_TREND });
+  const deals = buildDeals(joined, { minTrend: DEALS_MIN_TREND, history });
   const index = buildIndex(joined);
   const shards = buildShards(joined, SHARD_COUNT);
   const expansions = buildExpansions(joined, known);
@@ -110,12 +117,14 @@ async function main() {
   await writeJson(path.join(OUT_DIR, 'deals.json'), { columns: DEALS_COLUMNS, minTrend: DEALS_MIN_TREND, rows: deals });
   await writeJson(path.join(OUT_DIR, 'index.json'), { columns: INDEX_COLUMNS, rows: index });
   await writeJson(path.join(OUT_DIR, 'expansions.json'), expansions);
+  await writeJson(path.join(OUT_DIR, 'history.json'), history);
   await Promise.all(shards.map((s, i) => writeJson(path.join(OUT_DIR, 'shards', `${i}.json`), s)));
 
   const meta = {
     game: { id: Number(GAME_ID), slug: GAME_SLUGS[GAME_ID] || 'Pokemon' },
     builtAt: new Date().toISOString(),
     shardCount: SHARD_COUNT,
+    history: { dates: history.dates, tracked: Object.keys(history.n).length },
     sources: {
       guide: { ...remote.guide, createdAt: guideDoc.createdAt ?? null, url: SOURCES.guide },
       products: { ...remote.products, createdAt: productsDoc.createdAt ?? null, url: SOURCES.products },
