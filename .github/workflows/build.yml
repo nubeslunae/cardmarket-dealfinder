@@ -1,0 +1,65 @@
+name: Build & deploy
+
+on:
+  schedule:
+    # Elk halfuur checken of Cardmarket een nieuwe price guide heeft gepubliceerd.
+    # De guide verschijnt één keer per dag (~02:48 CET); zonder wijziging wordt niets gedeployd.
+    - cron: '*/30 * * * *'
+  workflow_dispatch:
+    inputs:
+      force:
+        description: 'Altijd bouwen, ook zonder wijziging in de bronbestanden'
+        type: boolean
+        default: false
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    outputs:
+      changed: ${{ steps.build.outputs.changed }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+      - name: Tests
+        run: node --test
+      - name: Build data
+        id: build
+        run: node scripts/build.mjs
+        env:
+          GAME_ID: '6'
+          SITE_URL: https://nubeslunae.github.io/cardmarket-dealfinder
+          FORCE: ${{ (github.event_name == 'push' || inputs.force) && 'true' || '' }}
+      - name: CardTrader-koppeling (optioneel, alleen met secret)
+        if: steps.build.outputs.changed == 'true'
+        run: node scripts/cardtrader-sync.mjs
+        env:
+          CARDTRADER_TOKEN: ${{ secrets.CARDTRADER_TOKEN }}
+      - name: Upload site
+        if: steps.build.outputs.changed == 'true'
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: site
+
+  deploy:
+    needs: build
+    if: needs.build.outputs.changed == 'true'
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4
