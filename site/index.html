@@ -1,0 +1,309 @@
+<!doctype html>
+<html lang="nl">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Cardmarket Deal Finder</title>
+  <meta name="robots" content="noindex">
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <header class="top">
+    <div class="brand">
+      <h1>Cardmarket Deal Finder</h1>
+      <p class="sub" id="meta-line">Data laden…</p>
+    </div>
+    <nav class="tabs" role="tablist">
+      <button class="tab is-active" data-tab="deals" role="tab">Deals</button>
+      <button class="tab" data-tab="watchlist" role="tab">Watchlist <span class="pill" id="wl-count">0</span></button>
+      <button class="tab" data-tab="live" role="tab">Live · CardTrader</button>
+      <button class="tab" data-tab="info" role="tab">Uitleg</button>
+    </nav>
+  </header>
+
+  <main>
+    <!-- ================= DEALS ================= -->
+    <section id="tab-deals" class="panel is-active">
+      <form class="filters" id="filters" onsubmit="return false">
+        <label>Signaal
+          <select name="signal">
+            <option value="low">Laagste listing vs trend</option>
+            <option value="sold">Gisteren verkocht vs 7d-gem.</option>
+            <option value="week">7d-gem. vs 30d-gem. (dalend)</option>
+          </select>
+        </label>
+        <label>Variant
+          <select name="variant">
+            <option value="n">Normaal</option>
+            <option value="h">Holo / reverse</option>
+            <option value="both">Beide</option>
+          </select>
+        </label>
+        <label>Trend € van
+          <input name="minTrend" type="number" min="0" step="1" value="10" inputmode="decimal">
+        </label>
+        <label>tot
+          <input name="maxTrend" type="number" min="0" step="1" placeholder="∞" inputmode="decimal">
+        </label>
+        <label>Laagste € van
+          <input name="minLow" type="number" min="0" step="1" placeholder="0" inputmode="decimal">
+        </label>
+        <label>tot
+          <input name="maxLow" type="number" min="0" step="1" placeholder="∞" inputmode="decimal">
+        </label>
+        <label>Min. korting %
+          <input name="minDisc" type="number" min="0" max="100" step="5" value="30" inputmode="numeric">
+        </label>
+        <label>Set
+          <select name="exp"><option value="">alle sets</option></select>
+        </label>
+        <label>Sorteer
+          <select name="sort">
+            <option value="score">korting ↓</option>
+            <option value="trend">trend ↓</option>
+            <option value="low">laagste ↑</option>
+            <option value="gap">verschil € ↓</option>
+            <option value="name">naam</option>
+          </select>
+        </label>
+        <label class="grow">Zoek
+          <input name="q" type="search" placeholder="naam, deel van naam, of set-id">
+        </label>
+        <label class="check"><input name="onlyDouble" type="checkbox"> alleen dubbel signaal</label>
+        <label class="check"><input name="hideWatched" type="checkbox"> verberg watchlist</label>
+        <button type="button" class="btn" id="filters-reset">Reset</button>
+      </form>
+      <p class="summary" id="deals-summary"></p>
+      <div class="table-wrap">
+        <table class="grid" id="deals-table">
+          <thead>
+            <tr>
+              <th data-sort="name">Kaart</th>
+              <th>Set</th>
+              <th class="num" data-sort="low">Laagste</th>
+              <th class="num" data-sort="trend">Trend</th>
+              <th class="num">Gem. 1d</th>
+              <th class="num">Gem. 7d</th>
+              <th class="num">Gem. 30d</th>
+              <th class="num" data-sort="gap">Verschil</th>
+              <th class="num" data-sort="score">Korting</th>
+              <th></th>
+            </tr>
+          </thead>
+          <tbody></tbody>
+        </table>
+      </div>
+      <div class="more"><button id="deals-more" class="btn" hidden>Toon meer</button></div>
+    </section>
+
+    <!-- ================= WATCHLIST ================= -->
+    <section id="tab-watchlist" class="panel">
+      <div class="wl-add">
+        <label class="grow">Kaart toevoegen
+          <input id="wl-search" type="search" placeholder="typ minstens 3 tekens, bijv. Charizard ex" autocomplete="off">
+        </label>
+        <ul id="wl-results" class="results" hidden></ul>
+      </div>
+      <form class="filters slim" id="wl-filters" onsubmit="return false">
+        <label class="grow">Filter
+          <input name="q" type="search" placeholder="naam of set">
+        </label>
+        <label>Toon
+          <select name="show">
+            <option value="all">alles</option>
+            <option value="hits">alleen onder max</option>
+            <option value="nomax">zonder max</option>
+          </select>
+        </label>
+        <label>Sorteer
+          <select name="sort">
+            <option value="status">status</option>
+            <option value="name">naam</option>
+            <option value="low">laagste ↑</option>
+            <option value="trend">trend ↓</option>
+            <option value="added">toegevoegd</option>
+          </select>
+        </label>
+      </form>
+      <p class="summary" id="wl-summary"></p>
+      <div class="table-wrap">
+        <table class="grid" id="wl-table">
+          <thead>
+            <tr>
+              <th>Kaart</th>
+              <th>Set</th>
+              <th>Variant</th>
+              <th class="num">Max €</th>
+              <th class="num">Laagste</th>
+              <th class="num">Trend</th>
+              <th class="num">Gem. 7d</th>
+              <th>Status</th>
+              <th></th>
+            </tr>
+          </thead>
+          <tbody></tbody>
+        </table>
+      </div>
+      <div class="wl-actions">
+        <button class="btn" id="wl-copy-names">Kopieer namen (voor wants list)</button>
+        <button class="btn" id="wl-export">Exporteer JSON</button>
+        <button class="btn" id="wl-import">Importeer JSON</button>
+        <button class="btn" id="wl-live">Live checken op CardTrader →</button>
+        <span id="wl-msg" class="msg"></span>
+      </div>
+      <textarea id="wl-io" class="io" rows="6" hidden spellcheck="false"></textarea>
+    </section>
+
+    <!-- ================= LIVE (CARDTRADER) ================= -->
+    <section id="tab-live" class="panel">
+      <div class="live-grid">
+        <details class="card" open id="ct-connection">
+          <summary>Verbinding met CardTrader</summary>
+          <div class="card-body">
+            <p class="hint">Haal je API-token op via CardTrader → profiel → instellingen → API. Het token blijft in deze browser (localStorage) en gaat rechtstreeks naar <code>api.cardtrader.com</code>; er zit geen server tussen.</p>
+            <div class="row">
+              <input id="ct-token" type="password" placeholder="Bearer-token" autocomplete="off" class="grow">
+              <button class="btn" id="ct-save">Opslaan</button>
+              <button class="btn" id="ct-test">Test</button>
+              <button class="btn" id="ct-forget">Vergeten</button>
+            </div>
+            <p class="msg" id="ct-status">Nog geen token.</p>
+            <p class="msg" id="ct-map-status"></p>
+          </div>
+        </details>
+
+        <details class="card" id="ct-settings">
+          <summary>Kosten &amp; filters (landed cost)</summary>
+          <form class="card-body settings" id="ct-settings-form" onsubmit="return false">
+            <label>Zero-fee % <input name="zeroFeePct" type="number" min="0" max="50" step="0.5" inputmode="decimal"></label>
+            <label>Zero-verzending €/order <input name="zeroShippingPerOrder" type="number" min="0" step="0.1" inputmode="decimal"></label>
+            <label>Kaarten per hub-order <input name="expectedBasketSize" type="number" min="1" step="1" inputmode="numeric"></label>
+            <label>Verzending €/verkoper (niet-hub) <input name="sellerShippingDefault" type="number" min="0" step="0.1" inputmode="decimal"></label>
+            <label>Verkoopcommissie % <input name="sellCommissionPct" type="number" min="0" max="30" step="0.5" inputmode="decimal"></label>
+            <label>Min. conditie
+              <select name="minCondition">
+                <option value="5">Mint</option><option value="4">Near Mint</option><option value="3">Slightly Played</option>
+                <option value="2">Moderately Played</option><option value="1">Played</option><option value="0">Poor (alles)</option>
+              </select>
+            </label>
+            <label>Talen (bv. en,de,nl) <input name="languages" type="text" placeholder="alle"></label>
+            <label>Verkoperlanden (bv. NL,DE,BE) <input name="countries" type="text" placeholder="alle"></label>
+            <label class="check"><input name="hubOnly" type="checkbox"> alleen CardTrader Zero (hub)</label>
+            <label class="check"><input name="excludeVacation" type="checkbox"> verkopers op vakantie negeren</label>
+            <label class="check"><input name="excludeGraded" type="checkbox"> graded negeren</label>
+            <p class="hint full">Haircut op referentiewaarde per conditie: NM/M 0 %, SP 10 %, MP 25 %, PL 40 %, PO 60 %. Marge = trend × (1 − commissie) × (1 − haircut) − landed cost.</p>
+          </form>
+        </details>
+      </div>
+
+      <div class="live-actions card">
+        <div class="card-body">
+          <div class="row wrap">
+            <button class="btn primary" id="ct-check-watchlist">Watchlist live checken</button>
+            <span class="sep"></span>
+            <label class="grow">Sets scannen (meerdere mogelijk)
+              <input id="ct-exp-search" type="search" placeholder="zoek set op naam of code" autocomplete="off">
+            </label>
+            <select id="ct-exp-select" multiple size="6" class="grow"></select>
+            <button class="btn" id="ct-scan">Scan geselecteerde sets</button>
+            <button class="btn" id="ct-stop" hidden>Stop</button>
+          </div>
+          <div class="progress" id="ct-progress" hidden><div class="bar"></div><span class="label"></span></div>
+          <p class="msg" id="ct-msg"></p>
+        </div>
+      </div>
+
+      <form class="filters" id="live-filters" onsubmit="return false">
+        <label>Vergelijk met
+          <select name="ref">
+            <option value="trend">Cardmarket trend</option>
+            <option value="avg7">Cardmarket 7d-gem.</option>
+            <option value="low">Cardmarket laagste</option>
+          </select>
+        </label>
+        <label>Min. korting % <input name="minDisc" type="number" min="-100" max="100" step="5" value="20" inputmode="numeric"></label>
+        <label>Min. marge € <input name="minMargin" type="number" step="1" placeholder="geen" inputmode="decimal"></label>
+        <label>Min. referentie € <input name="minRef" type="number" min="0" step="1" value="5" inputmode="decimal"></label>
+        <label>Prijs € van <input name="minPrice" type="number" min="0" step="1" placeholder="0" inputmode="decimal"></label>
+        <label>tot <input name="maxPrice" type="number" min="0" step="1" placeholder="∞" inputmode="decimal"></label>
+        <label>Variant
+          <select name="variant"><option value="both">beide</option><option value="n">normaal</option><option value="h">holo / reverse</option></select>
+        </label>
+        <label>Sorteer
+          <select name="sort">
+            <option value="disc">korting ↓</option><option value="margin">marge ↓</option><option value="landed">landed ↑</option>
+            <option value="price">prijs ↑</option><option value="ref">referentie ↓</option><option value="name">naam</option>
+          </select>
+        </label>
+        <label class="grow">Zoek <input name="q" type="search" placeholder="kaart, verkoper, set"></label>
+        <label class="check"><input name="onlyWatch" type="checkbox"> alleen watchlist</label>
+        <label class="check"><input name="onlyUnmatched" type="checkbox"> zonder Cardmarket-match</label>
+      </form>
+      <p class="summary" id="live-summary">Nog geen live data. Sla je token op en klik "Watchlist live checken" of scan sets.</p>
+      <div class="table-wrap">
+        <table class="grid" id="live-table">
+          <thead>
+            <tr>
+              <th>Kaart</th><th>Set</th><th>Cond.</th><th>Taal</th><th>Verkoper</th>
+              <th class="num">Prijs</th><th class="num">Landed</th><th class="num">Referentie</th>
+              <th class="num">Korting</th><th class="num">Marge</th><th></th>
+            </tr>
+          </thead>
+          <tbody></tbody>
+        </table>
+      </div>
+      <div class="more"><button id="live-more" class="btn" hidden>Toon meer</button></div>
+
+      <div class="card basket" id="basket">
+        <div class="card-body">
+          <div class="row wrap">
+            <h2>Mandje-optimalisatie voor je watchlist</h2>
+            <button class="btn" id="basket-run">Bereken goedkoopste combinatie</button>
+          </div>
+          <p class="hint">Hub-verkopers (CardTrader Zero) tellen als één zending; een losse verkoper komt er alleen bij als zijn besparing zijn verzendkosten dekt. Gebruikt de watchlist-maxima als bovengrens en de live resultaten van de laatste watchlist-check.</p>
+          <div id="basket-out"></div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ================= INFO ================= -->
+    <section id="tab-info" class="panel">
+      <div class="prose">
+        <h2>Hoe dit werkt</h2>
+        <p>Twee bronnen, twee rollen. <strong>Cardmarket</strong> publiceert dagelijks een price guide met per kaart de laagste listing, de trendprijs en gemiddelde verkoopprijzen over 1, 7 en 30 dagen; dat is de referentiewaarde. <strong>CardTrader</strong> heeft een officiële API waarmee je met je eigen token live aanbiedingen ophaalt, inclusief conditie, taal, verkoperland en of de verkoper via CardTrader Zero (één zending voor meerdere verkopers) levert. Dit dashboard zet die twee naast elkaar als <em>landed cost</em>: prijs + fee + verzending, vergeleken met de Cardmarket-waarde.</p>
+        <dl class="facts" id="facts"></dl>
+
+        <h2>De signalen op de Deals-tab (Cardmarket, dagelijks)</h2>
+        <ul>
+          <li><strong>Laagste listing vs trend.</strong> Er staat nu een aanbieding ver onder de trendprijs. "Laagste" telt over <em>alle</em> condities en talen; klik altijd door.</li>
+          <li><strong>Gisteren verkocht vs 7d-gemiddelde.</strong> Echte transacties van gisteren ver onder het weekgemiddelde. Scherper signaal, vaak een verkoper die zijn voorraad te laag prijst.</li>
+          <li><strong>7d-gem. vs 30d-gem.</strong> Dalende kaarten; handig om te zien wat richting je koopprijs zakt.</li>
+        </ul>
+        <p>"Dubbel" = laagste listing én gisteren verkocht wijzen dezelfde kant op. Onder de €10 eet verzending de marge op; vandaar de standaardgrens.</p>
+
+        <h2>Live-tab (CardTrader, op aanvraag)</h2>
+        <ol>
+          <li>Token opslaan en testen. Het token verlaat je browser alleen richting CardTrader.</li>
+          <li><em>Watchlist live checken</em> haalt per kaart de 25 goedkoopste aanbiedingen op (max. 10 requests/seconde volgens CardTrader; wij doen 4).</li>
+          <li><em>Sets scannen</em> haalt per set alle blueprints met hun goedkoopste aanbiedingen op en vergelijkt met Cardmarket. Een volledige set is één request.</li>
+          <li><em>Mandje</em> zoekt de combinatie van verkopers die je watchlist het goedkoopst dekt.</li>
+        </ol>
+        <p>De koppeling Cardmarket ⇄ CardTrader komt uit de blueprint-export van CardTrader (bevat Cardmarket-ID's) en wordt dagelijks in GitHub Actions ververst zodra het secret <code>CARDTRADER_TOKEN</code> is gezet. Zonder die mapping werkt de Live-tab alleen op CardTrader-namen, zonder Cardmarket-referentie.</p>
+
+        <h2>Realtime meldingen via Cardmarket zelf</h2>
+        <p>Voor meldingen binnen minuten op Cardmarket gebruik je het ingebouwde <strong>Email Alarm</strong>: Buying → My Wants → wants list → per kaart conditie, taal, <em>Buy price</em> en <em>Email Alarm</em>. Cardmarket mailt de eerste keer dat een passende listing verschijnt; daarna opnieuw aanvinken. De watchlist-tab heeft een knop die de namen kopieert.</p>
+
+        <h2>Wat dit bewust niet doet</h2>
+        <ul>
+          <li>Geen Cardmarket-listings live ophalen: Cardmarket geeft geen API-toegang meer uit, scrapen is tegen de voorwaarden en wordt door Cloudflare geblokkeerd.</li>
+          <li>Geen automatisch kopen, ook niet via de CardTrader-cart. Je klikt zelf door.</li>
+          <li>Geen server. Alles is GitHub Actions + statische site + jouw browser.</li>
+        </ul>
+        <p>Watchlist, filters, token en kosteninstellingen staan alleen in deze browser (localStorage). Maak af en toe een JSON-export als back-up.</p>
+      </div>
+    </section>
+  </main>
+
+  <script type="module" src="app.js"></script>
+</body>
+</html>
