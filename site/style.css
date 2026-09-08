@@ -286,3 +286,9 @@ main { padding: 16px 22px 40px; max-width: 1400px; margin: 0 auto; }
   .spark { width: 72px; }
 }
 @media (min-width: 721px) { .grid td.name .set-inline { display: none; } }
+
+/* ---- timer / banner / conditie ---- */
+.clock { margin-top: -8px; }
+.banner { width: 100%; display: flex; align-items: center; gap: 10px; padding: 8px 12px; margin: 0 0 8px; background: var(--good-soft); color: var(--good); border-radius: 8px; font-weight: 600; }
+.cond-note { display: block; margin-top: 4px; font-size: 12px; color: var(--muted); font-weight: 400; }
+.cond-note b { color: var(--text); font-weight: 600; }

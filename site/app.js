@@ -269,7 +269,8 @@ function renderDeals() {
       <td class="num"><span class="disc${d.score >= 0.5 ? ' strong' : ''}">${fmtPct(d.score)}</span></td>
       <td class="actions">${linksHtml(d.name, d.exp)}
           <button type="button" data-add="${d.id}" data-variant="${d.variant}" ${watched.has(key) ? 'disabled' : ''}>${watched.has(key) ? 'op watchlist' : '+ watchlist'}</button>
-          <button type="button" data-ignore="${d.id}" data-variant="${d.variant}" title="${d.ignored ? 'Weer tonen' : 'Verberg deze kaart voortaan'}">${d.ignored ? 'toon weer' : 'negeer'}</button></td>`;
+          <button type="button" data-ignore="${d.id}" data-variant="${d.variant}" title="${d.ignored ? 'Weer tonen' : 'Verberg deze kaart voortaan'}">${d.ignored ? 'toon weer' : 'negeer'}</button>
+          <button type="button" data-cond="${d.avg7 ?? ''}" title="Richtprijs per conditie (7d-gem. × correctie)">cond.</button></td>`;
     return tr;
   }));
   renderToday();
@@ -305,7 +306,17 @@ async function renderToday() {
       : '<p class="msg">Nog geen watchlist. Voeg kaarten toe met "+ watchlist".</p>'}</div>
   </div>`;
 }
+function toggleConditionNote(btn) {
+  const tr = btn.closest('tr'); const cell = tr?.querySelector('td.name'); if (!cell) return;
+  const existing = cell.querySelector('.cond-note');
+  if (existing) { existing.remove(); return; }
+  const note = document.createElement('span'); note.className = 'cond-note';
+  note.innerHTML = conditionNote(btn.dataset.cond === '' ? null : Number(btn.dataset.cond));
+  cell.appendChild(note);
+}
 function onDealsClick(ev) {
+  const cond = ev.target.closest('button[data-cond]');
+  if (cond) { toggleConditionNote(cond); return; }
   const ign = ev.target.closest('button[data-ignore]');
   if (ign) {
     const key = `${ign.dataset.ignore}:${ign.dataset.variant}`;
@@ -399,7 +410,7 @@ async function renderWatchlist() {
       <td class="num opt">${fmtEur(p?.trend)}</td>
       <td class="num opt">${fmtEur(p?.avg7)}</td>
       <td>${status}</td>
-      <td class="actions">${linksHtml(w.name, w.exp)} <button type="button" data-remove="${i}" title="Verwijderen">✕</button></td>`;
+      <td class="actions">${linksHtml(w.name, w.exp)} <button type="button" data-cond="${p?.avg7 ?? ''}" title="Richtprijs per conditie">cond.</button> <button type="button" data-remove="${i}" title="Verwijderen">✕</button></td>`;
     return tr;
   }));
 }
@@ -414,6 +425,8 @@ function initWatchlist() {
   table.addEventListener('input', onChange);
   table.addEventListener('change', onChange);
   table.addEventListener('click', (ev) => {
+    const cond = ev.target.closest('button[data-cond]');
+    if (cond) { toggleConditionNote(cond); return; }
     const sug = ev.target.closest('button[data-suggest]');
     if (sug) { const w = state.watchlist[Number(sug.dataset.suggest)]; if (w) { w.max = Number(sug.dataset.value); saveWatchlist(); renderWatchlist(); } return; }
     const btn = ev.target.closest('button[data-remove]'); if (!btn) return;
@@ -699,6 +712,42 @@ function runBasket() {
   out.innerHTML = html;
 }
 
+/* ---------- timer: volgende Cardmarket-bestand + automatische melding bij nieuwe data ---------- */
+const CONDITION_FACTORS = [['NM', 1], ['SP', 0.9], ['MP', 0.75], ['PL', 0.6], ['PO', 0.4]];
+function conditionNote(avg7) {
+  if (avg7 == null) return 'Geen 7d-verkoopgemiddelde, dus geen richtprijs per conditie.';
+  return `Richtprijs per conditie: ${CONDITION_FACTORS.map(([c, f]) => `<b>${c}</b> ${fmtEur(avg7 * f)}`).join(' · ')}`;
+}
+function nextGuideTime(createdAt) {
+  const last = new Date(createdAt);
+  if (Number.isNaN(last.getTime())) return null;
+  const next = new Date(last.getTime());
+  while (next.getTime() <= Date.now()) next.setTime(next.getTime() + 24 * 3600 * 1000);
+  return next;
+}
+function renderClock() {
+  const el = $('#clock'); const created = state.meta?.sources?.guide?.createdAt;
+  if (!el || !created) return;
+  const next = nextGuideTime(created);
+  const last = new Date(created);
+  const sameDay = last.toDateString() === new Date().toDateString();
+  const diff = next ? next.getTime() - Date.now() : null;
+  const hhmm = (d) => d.toLocaleTimeString('nl-NL', { hour: '2-digit', minute: '2-digit' });
+  const countdown = diff == null ? '' : diff < 3600e3 ? `over ${Math.max(1, Math.round(diff / 60e3))} min` : `over ${Math.floor(diff / 3600e3)}u ${Math.round((diff % 3600e3) / 60e3)}m`;
+  el.textContent = `${sameDay ? 'Bestand van vandaag is binnen' : 'Nieuw Cardmarket-bestand verwacht'} · volgende rond ${next ? hhmm(next) : '?'} (${countdown}); het dashboard checkt elk halfuur en ververst tot 30 min daarna.`;
+}
+async function watchForNewData() {
+  try {
+    const r = await fetch('data/meta.json', { cache: 'no-store' });
+    if (!r.ok) return;
+    const m = await r.json();
+    if (state.meta && m.builtAt && m.builtAt !== state.meta.builtAt) {
+      const b = $('#refresh-banner'); b.hidden = false;
+      b.firstChild.textContent = `Nieuwe data (gebouwd ${fmtDate(m.builtAt)}, price guide ${fmtDate(m.sources?.guide?.createdAt)}). `;
+    }
+  } catch { /* offline */ }
+}
+
 /* ---------- info ---------- */
 function renderInfo() {
   const m = state.meta; if (!m) return;
@@ -731,6 +780,9 @@ async function main() {
     return;
   }
   fillExpansionSelect(); renderInfo(); renderDeals();
+  renderClock(); setInterval(renderClock, 30e3);
+  setInterval(watchForNewData, 10 * 60e3);
+  $('#refresh-now').addEventListener('click', () => location.reload());
   if ($('#tab-watchlist').classList.contains('is-active')) renderWatchlist();
   if ($('#tab-live').classList.contains('is-active')) initLiveOnce();
 }

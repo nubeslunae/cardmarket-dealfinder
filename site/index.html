@@ -16,7 +16,9 @@
     <div class="brand">
       <h1>Cardmarket Deal Finder</h1>
       <p class="sub" id="meta-line">Data laden…</p>
+      <p class="sub clock" id="clock"></p>
     </div>
+    <div class="banner" id="refresh-banner" hidden>Er is nieuwe data. <button type="button" class="btn primary" id="refresh-now">Herladen</button></div>
     <nav class="tabs" role="tablist">
       <button class="tab is-active" data-tab="deals" role="tab">Deals</button>
       <button class="tab" data-tab="watchlist" role="tab">Watchlist <span class="pill" id="wl-count">0</span></button>
@@ -307,6 +309,10 @@
         <p>Gecontroleerd op gearchiveerde Cardmarket-productpagina's: het veld <em>laagste</em> is exact de "From"-prijs op de productpagina, dus de goedkoopste listing in <strong>élke conditie en taal</strong>. Voorbeelden: Arceus LV.X "From €4,99" bij trend €38,54 blijkt een Poor-exemplaar (de vijf goedkoopste listings zijn PO/PO/PO/PL/PL). En bij goedkope commons staat "From €0,02" tegenover trend €0,20 tot €0,30, met tientallen NM-listings op €0,02. Cardmarket's trend en verkoopgemiddelden liggen dus <strong>structureel ver boven de goedkoopste listing</strong>, ook bij NM: kopers betalen meer omdat ze bij één verkoper bundelen (verzendkosten), en de trend is een gewogen, traag bewegend gemiddelde.</p>
         <p>Gevolg: "laagste ligt 90 % onder trend" is meestal géén koopje maar het normale gat tussen vloerprijs en trend, of een beschadigd exemplaar. Daarom staat de referentie standaard op het 7-daags verkoopgemiddelde, heet de kolom "Eronder" in plaats van "korting", en is het signaal <em>nieuw laag</em> het enige dat een echte verandering meet.</p>
 
+        <h2>Conditie: zit dat in de dagelijkse data?</h2>
+        <p><strong>Nee.</strong> De Cardmarket-bestanden bevatten per kaart alleen laagste, trend en de verkoopgemiddelden (en dezelfde velden voor holo). Geen conditie, geen taal, geen verkoper. Een Poor-exemplaar en een Near Mint-exemplaar tellen in "laagste" precies hetzelfde mee, en in de verkoopgemiddelden zitten alle condities door elkaar. Daarom kan dit tabblad een Poor-listing nooit uitsluiten.</p>
+        <p>Wat wél helpt: bij elke kaart staat onder <strong>cond.</strong> een richtprijs per conditie, afgeleid van het 7-daags verkoopgemiddelde met een correctie (NM/M 100 %, SP 90 %, MP 75 %, PL 60 %, PO 40 %). Klik je door naar Cardmarket, dan zie je daar de conditie van de listing en weet je direct of de prijs bij die conditie past. Conditie écht afdwingen kan op twee plekken: de Cardmarket wants list met <em>Min. condition</em> + Email Alarm, en de CardTrader-tab, waar elke listing zijn conditie meestuurt en de marge al conditie-gecorrigeerd is.</p>
+
         <h2>De signalen op de Deals-tab (Cardmarket, dagelijks)</h2>
         <ul>
           <li><strong>Nieuw laag.</strong> De laagste listing van vandaag ligt duidelijk onder de laagste van de vorige zeven dagen: er is gisteren een goedkoop exemplaar bijgekomen. Dit is het scherpste koopsignaal uit deze data. Het heeft historie nodig, die vanaf de tweede dag na installatie opbouwt.</li>
@@ -356,6 +362,7 @@
 
         <h2>Handig om te weten</h2>
         <ul>
+          <li><strong>Timer</strong> in de kop: wanneer het volgende Cardmarket-bestand verwacht wordt (dagelijks rond 02:48) en of dat van vandaag al binnen is. De pipeline checkt elk halfuur; zodra er nieuwe data staat, verschijnt hier een knop "Herladen" (de pagina kijkt elke 10 minuten).</li>
           <li><strong>Vandaag</strong> bovenaan de Deals-tab: nieuwe dalingen en watchlist-kaarten onder je max, in één oogopslag.</li>
           <li><strong>Negeer</strong> bij een kaart verbergt hem voortaan; "toon genegeerde" haalt hem terug.</li>
           <li><strong>Deel filters</strong> kopieert een link met je huidige filters; handig als bladwijzer op je telefoon (bijv. "trend ≥ €20, 30–60 % eronder").</li>
