@@ -236,3 +236,6 @@ main { padding: 16px 22px 40px; max-width: 1400px; margin: 0 auto; }
 .basket-block { padding: 10px 12px; background: var(--surface-2); border-radius: 8px; }
 .basket-block ul { margin: 0; padding-left: 18px; font-size: 13px; }
 @media (max-width: 900px) { .live-grid { grid-template-columns: 1fr; } }
+.grid td.name strong { font-weight: 600; }
+.grid td.name .attacks { color: var(--muted); font-size: 12px; }
+.grid td.actions a { margin-right: 4px; }

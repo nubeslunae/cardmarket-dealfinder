@@ -27,9 +27,17 @@
       <form class="filters" id="filters" onsubmit="return false">
         <label>Signaal
           <select name="signal">
-            <option value="low">Laagste listing vs trend</option>
-            <option value="sold">Gisteren verkocht vs 7d-gem.</option>
-            <option value="week">7d-gem. vs 30d-gem. (dalend)</option>
+            <option value="low">Laagste listing onder referentie</option>
+            <option value="new">Nieuw laag: onder laagste van vorige 7 dagen</option>
+            <option value="sold">Gisteren verkocht onder 7d-gem.</option>
+            <option value="week">Dalend: 7d-gem. onder 30d-gem.</option>
+          </select>
+        </label>
+        <label>Referentie
+          <select name="ref">
+            <option value="avg7">7d-verkoopgemiddelde</option>
+            <option value="avg30">30d-verkoopgemiddelde</option>
+            <option value="trend">Trend</option>
           </select>
         </label>
         <label>Variant
@@ -51,7 +59,7 @@
         <label>tot
           <input name="maxLow" type="number" min="0" step="1" placeholder="∞" inputmode="decimal">
         </label>
-        <label>Min. korting %
+        <label>Min. eronder %
           <input name="minDisc" type="number" min="0" max="100" step="5" value="30" inputmode="numeric">
         </label>
         <label>Set
@@ -59,10 +67,10 @@
         </label>
         <label>Sorteer
           <select name="sort">
-            <option value="score">korting ↓</option>
+            <option value="score">% eronder ↓</option>
+            <option value="gap">verschil € ↓</option>
             <option value="trend">trend ↓</option>
             <option value="low">laagste ↑</option>
-            <option value="gap">verschil € ↓</option>
             <option value="name">naam</option>
           </select>
         </label>
@@ -71,6 +79,7 @@
         </label>
         <label class="check"><input name="onlyDouble" type="checkbox"> alleen dubbel signaal</label>
         <label class="check"><input name="hideWatched" type="checkbox"> verberg watchlist</label>
+        <label class="check" title="Verbergt kaarten waarvan trend, 7d- en 30d-gemiddelde meer dan 3× uiteenlopen, of waarvan de laagste listing onder 10 % van de trend of onder €1 ligt: vrijwel altijd een beschadigd of anderstalig exemplaar, of al verkocht."><input name="plausibleOnly" type="checkbox" checked> verberg onwaarschijnlijke</label>
         <button type="button" class="btn" id="filters-reset">Reset</button>
       </form>
       <p class="summary" id="deals-summary"></p>
@@ -80,13 +89,14 @@
             <tr>
               <th data-sort="name">Kaart</th>
               <th>Set</th>
-              <th class="num" data-sort="low">Laagste</th>
+              <th class="num" data-sort="low" title="Goedkoopste listing vandaag, élke conditie en taal">Laagste</th>
+              <th class="num" title="Laagste 'laagste' van de vorige 7 dagen (historie)">Vorige 7d</th>
               <th class="num" data-sort="trend">Trend</th>
-              <th class="num">Gem. 1d</th>
-              <th class="num">Gem. 7d</th>
-              <th class="num">Gem. 30d</th>
-              <th class="num" data-sort="gap">Verschil</th>
-              <th class="num" data-sort="score">Korting</th>
+              <th class="num" title="Gemiddelde verkoopprijs gisteren">Gem. 1d</th>
+              <th class="num" title="Gemiddelde verkoopprijs 7 dagen">Gem. 7d</th>
+              <th class="num" title="Gemiddelde verkoopprijs 30 dagen">Gem. 30d</th>
+              <th class="num" data-sort="gap" title="Referentie − laagste, in euro">Verschil</th>
+              <th class="num" data-sort="score" title="Percentage onder de gekozen referentie (of, bij 'nieuw laag', onder de vorige laagste)">Eronder</th>
               <th></th>
             </tr>
           </thead>
@@ -273,13 +283,18 @@
         <p>Twee bronnen, twee rollen. <strong>Cardmarket</strong> publiceert dagelijks een price guide met per kaart de laagste listing, de trendprijs en gemiddelde verkoopprijzen over 1, 7 en 30 dagen; dat is de referentiewaarde. <strong>CardTrader</strong> heeft een officiële API waarmee je met je eigen token live aanbiedingen ophaalt, inclusief conditie, taal, verkoperland en of de verkoper via CardTrader Zero (één zending voor meerdere verkopers) levert. Dit dashboard zet die twee naast elkaar als <em>landed cost</em>: prijs + fee + verzending, vergeleken met de Cardmarket-waarde.</p>
         <dl class="facts" id="facts"></dl>
 
+        <h2>Wat "laagste" en "trend" echt betekenen (belangrijk)</h2>
+        <p>Gecontroleerd op gearchiveerde Cardmarket-productpagina's: het veld <em>laagste</em> is exact de "From"-prijs op de productpagina, dus de goedkoopste listing in <strong>élke conditie en taal</strong>. Voorbeelden: Arceus LV.X "From €4,99" bij trend €38,54 blijkt een Poor-exemplaar (de vijf goedkoopste listings zijn PO/PO/PO/PL/PL). En bij goedkope commons staat "From €0,02" tegenover trend €0,20 tot €0,30, met tientallen NM-listings op €0,02. Cardmarket's trend en verkoopgemiddelden liggen dus <strong>structureel ver boven de goedkoopste listing</strong>, ook bij NM: kopers betalen meer omdat ze bij één verkoper bundelen (verzendkosten), en de trend is een gewogen, traag bewegend gemiddelde.</p>
+        <p>Gevolg: "laagste ligt 90 % onder trend" is meestal géén koopje maar het normale gat tussen vloerprijs en trend, of een beschadigd exemplaar. Daarom staat de referentie standaard op het 7-daags verkoopgemiddelde, heet de kolom "Eronder" in plaats van "korting", en is het signaal <em>nieuw laag</em> het enige dat een echte verandering meet.</p>
+
         <h2>De signalen op de Deals-tab (Cardmarket, dagelijks)</h2>
         <ul>
-          <li><strong>Laagste listing vs trend.</strong> Er staat nu een aanbieding ver onder de trendprijs. "Laagste" telt over <em>alle</em> condities en talen; klik altijd door.</li>
-          <li><strong>Gisteren verkocht vs 7d-gemiddelde.</strong> Echte transacties van gisteren ver onder het weekgemiddelde. Scherper signaal, vaak een verkoper die zijn voorraad te laag prijst.</li>
-          <li><strong>7d-gem. vs 30d-gem.</strong> Dalende kaarten; handig om te zien wat richting je koopprijs zakt.</li>
+          <li><strong>Nieuw laag.</strong> De laagste listing van vandaag ligt duidelijk onder de laagste van de vorige zeven dagen: er is gisteren een goedkoop exemplaar bijgekomen. Dit is het scherpste koopsignaal uit deze data. Het heeft historie nodig, die vanaf de tweede dag na installatie opbouwt.</li>
+          <li><strong>Laagste listing onder referentie.</strong> Het klassieke "From"-versus-gemiddelde. Bruikbaar als shortlist, maar klik altijd door en let op conditie en taal.</li>
+          <li><strong>Gisteren verkocht onder 7d-gemiddelde.</strong> Echte transacties van gisteren ver onder het weekgemiddelde: iemand heeft goedkoop verkocht, mogelijk staat er meer van die verkoper.</li>
+          <li><strong>Dalend.</strong> 7d-gemiddelde onder 30d-gemiddelde; handig om te zien wat richting je koopprijs zakt.</li>
         </ul>
-        <p>"Dubbel" = laagste listing én gisteren verkocht wijzen dezelfde kant op. Onder de €10 eet verzending de marge op; vandaar de standaardgrens.</p>
+        <p>"Dubbel" = laagste onder referentie én gisteren goedkoop verkocht. Onder de €10 eet verzending de marge op; vandaar de standaardgrens. Conditie en taal per listing zie je alleen op de Live-tab (CardTrader) of door door te klikken.</p>
 
         <h2>Live-tab (CardTrader, op aanvraag)</h2>
         <ol>
@@ -292,6 +307,21 @@
 
         <h2>Realtime meldingen via Cardmarket zelf</h2>
         <p>Voor meldingen binnen minuten op Cardmarket gebruik je het ingebouwde <strong>Email Alarm</strong>: Buying → My Wants → wants list → per kaart conditie, taal, <em>Buy price</em> en <em>Email Alarm</em>. Cardmarket mailt de eerste keer dat een passende listing verschijnt; daarna opnieuw aanvinken. De watchlist-tab heeft een knop die de namen kopieert.</p>
+
+        <h2>Kaartnamen, sets en links</h2>
+        <ul>
+          <li><strong>Naam</strong> = Cardmarket's catalogusnaam: de kaart plus, in grijs, de aanvalsnamen waarmee Cardmarket uitvoeringen uit elkaar houdt. "Charizard ex · Burning Darkness" is dus een andere kaart dan "Charizard ex · Brave Wing".</li>
+          <li><strong>Kaart ↗</strong> opent de exacte kaart op Cardmarket met al haar uitvoeringen en per set de laagste prijs. <strong>In set ↗</strong> opent de singles van precies deze set, gefilterd op de naam.</li>
+          <li><strong>Setnamen</strong> zitten niet in de Cardmarket-bestanden. Ze komen uit Cardmarket's eigen set-keuzelijst via het Internet Archive; sets die nieuwer zijn dan de laatste archiefkopie tonen tijdelijk hun nummer en de maand van verschijnen. Handmatig aanvullen kan in <code>data/expansions.json</code>.</li>
+        </ul>
+
+        <h2>Waarom vind ik een extreem lage "laagste" niet terug?</h2>
+        <ul>
+          <li>Op een kaart van €5.000 is een listing van €100 vrijwel altijd een beschadigd of Japans exemplaar (zie hierboven).</li>
+          <li>De prijzen zijn een momentopname van ~02:48 's nachts. Een echt onderprijsd exemplaar is vaak binnen het uur weg.</li>
+          <li>Cardmarket verbergt op de productpagina standaard verkopers die niet naar jouw land verzenden en talen buiten je voorkeur. Zet die filters uit om de listing te zien.</li>
+          <li>Bij sommige kaarten spreken trend, 7d- en 30d-gemiddelde elkaar tegen; dan is de referentie zelf onbetrouwbaar. Het filter "verberg onwaarschijnlijke" (standaard aan) haalt die en de extreme gevallen weg; zet het uit als je ze toch wilt zien.</li>
+        </ul>
 
         <h2>Wat dit bewust niet doet</h2>
         <ul>
