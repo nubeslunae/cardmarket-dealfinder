@@ -50,8 +50,8 @@ jobs:
         run: node scripts/tcgdex-sync.mjs
         env:
           SITE_URL: https://nubeslunae.github.io/cardmarket-dealfinder
-      - name: JustTCG conditie-prijzen (optioneel, alleen met secret; max 25 calls/run)
-        if: steps.build.outputs.changed == 'true'
+      - name: JustTCG conditie-prijzen (optioneel, alleen met secret; max 25 calls/run; niet bij push, spaart het maandbudget)
+        if: steps.build.outputs.changed == 'true' && github.event_name != 'push'
         run: node scripts/justtcg-sync.mjs
         env:
           SITE_URL: https://nubeslunae.github.io/cardmarket-dealfinder
