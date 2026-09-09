@@ -41,6 +41,10 @@ jobs:
         run: node scripts/tcgdex-sync.mjs
         env:
           SITE_URL: https://nubeslunae.github.io/cardmarket-dealfinder
+      - name: TCGCSV (koppeling productId → Cardmarket)
+        run: node scripts/tcgcsv-sync.mjs
+        env:
+          SITE_URL: https://nubeslunae.github.io/cardmarket-dealfinder
       - name: VS-historie uit archief
         run: node scripts/tcgcsv-history.mjs
         env:

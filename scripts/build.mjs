@@ -123,14 +123,21 @@ async function main() {
   // Bestanden van optionele stappen (JustTCG, CardTrader) van de vorige versie meenemen; de stappen zelf
   // overschrijven ze als ze draaien. Zonder dit verdwijnen ze bij een build waarin de stap wordt overgeslagen.
   const carry = [];
-  for (const file of ['justtcg.json', 'cardtrader/map.json', 'cmurl.json', 'cmurl-miss.json', 'tcgdex.json', 'tcgdex-nocm.json', 'tcgcsv.json', 'tcgcsv-products.json', 'codes.json', 'play.json']) {
+  for (const file of ['justtcg.json', 'cardtrader/map.json', 'cmurl.json', 'cmurl-miss.json', 'tcgdex.json', 'tcgdex-nocm.json', 'tcgdex-sets.json', 'tcgcsv.json', 'tcgcsv-products.json', 'codes.json', 'play.json']) {
     const prev = await liveJson(file);
     if (prev) carry.push([file, prev]);
   }
   await rm(OUT_DIR, { recursive: true, force: true });
-  // Seeds uit de repo als basis; de live versies (groter/nieuwer) overschrijven ze; de sync-stappen daarna weer.
+  // Seeds uit de repo als basis, samengevoegd met de live versies (per kaart wint de rijkste entry); de sync-stappen
+  // daarna overschrijven wat ze zelf ophalen.
   for (const [seed, file] of [['data/tcgdex.json', 'tcgdex.json'], ['data/cmurl.json', 'cmurl.json']]) {
-    if (existsSync(seed) && !carry.some(([f]) => f === file)) await writeJson(path.join(OUT_DIR, file), JSON.parse(await readFile(seed, 'utf8')));
+    if (!existsSync(seed)) continue;
+    const seedData = JSON.parse(await readFile(seed, 'utf8'));
+    const live = carry.find(([f]) => f === file);
+    if (!live) { carry.push([file, seedData]); continue; }
+    const merged = { ...seedData };
+    for (const [k, v] of Object.entries(live[1])) { const s = merged[k]; if (!s || !Array.isArray(s) || !Array.isArray(v) || v.length >= s.length) merged[k] = v; }
+    live[1] = merged;
   }
   for (const [file, data] of carry) await writeJson(path.join(OUT_DIR, file), data);
   await writeJson(path.join(OUT_DIR, 'deals.json'), { columns: DEALS_COLUMNS, minTrend: DEALS_MIN_TREND, rows: deals });
