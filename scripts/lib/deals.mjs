@@ -12,6 +12,8 @@ export const DEALS_COLUMNS = [
   'prevLow', 'hPrevLow',       // laagste "laagste" van de vorige 7 dagen (null zonder historie)
   'yLow', 'hYLow',             // "laagste" van gisteren
   'daysAtLow', 'hDaysAtLow',   // aantal voorgaande dagen waarop de laagste al (vrijwel) dezelfde prijs had
+  'saleDays', 'hSaleDays',     // dagen (laatste 30) waarop het 1-daags verkoopgemiddelde veranderde = nieuwe verkoop
+  'saleDaysN', 'hSaleDaysN',   // aantal dagparen waarover dat gemeten kon worden
 ];
 export const HISTORY_DAYS = 60;   // vandaag + 59 voorgaande dagen
 export const HISTORY_SHARDS = 64;
@@ -84,18 +86,19 @@ export function updateHistory(prev, joined, date, { days = HISTORY_DAYS, minTren
   const dates = [...base.dates, date].slice(-days);
   const len = base.dates.length;
   const pad = (arr) => { const a = Array.isArray(arr) ? [...arr] : []; while (a.length < len) a.unshift(null); return a.slice(-len); };
-  const series = (entry) => (Array.isArray(entry) ? { l: entry, a: [] } : entry || { l: [], a: [] });
-  const next = (entry, low, avg7) => {
+  const series = (entry) => (Array.isArray(entry) ? { l: entry, a: [], s: [] } : entry || { l: [], a: [], s: [] });
+  const next = (entry, low, avg7, avg1) => {
     const s = series(entry);
     const l = [...pad(s.l), low].slice(-days);
     const a = [...pad(s.a), avg7].slice(-days);
-    return l.some((v) => v != null) || a.some((v) => v != null) ? { l, a } : null;
+    const s1 = [...pad(s.s), avg1].slice(-days); // 1-daags verkoopgemiddelde: verandert alleen bij een nieuwe verkoop
+    return l.some((v) => v != null) || a.some((v) => v != null) ? { l, a, s: s1 } : null;
   };
   const n = {}; const h = {};
   for (const p of joined) {
     if (Math.max(p.n[1] ?? 0, p.h[1] ?? 0) < minTrend) continue;
-    const en = next(base.n[p.id], p.n[0], p.n[3]);
-    const eh = next(base.h[p.id], p.h[0], p.h[3]);
+    const en = next(base.n[p.id], p.n[0], p.n[3], p.n[2]);
+    const eh = next(base.h[p.id], p.h[0], p.h[3], p.h[2]);
     if (en) n[p.id] = en;
     if (eh) h[p.id] = eh;
   }
@@ -152,6 +155,23 @@ export function daysAtSameLow(entry, tolerance = 0.02) {
   return days;
 }
 
+/**
+ * Verkoopdagen: aantal dagparen (binnen `window` dagen) waarop het 1-daags verkoopgemiddelde veranderde.
+ * Cardmarket schuift dat gemiddelde door zolang er geen nieuwe verkoop is, dus een verandering = verkoop
+ * (verkopen tegen exact dezelfde prijs worden gemist: ondergrens). Levert { days, n } met n = meetbare paren.
+ */
+export function saleChangeDays(entry, window = 30) {
+  const s = (entry && !Array.isArray(entry) && entry.s) || [];
+  const arr = s.slice(-(window + 1));
+  let days = 0; let n = 0;
+  for (let i = 1; i < arr.length; i += 1) {
+    if (arr[i] == null || arr[i - 1] == null) continue;
+    n += 1;
+    if (Math.abs(arr[i] - arr[i - 1]) > 0.004) days += 1;
+  }
+  return { days, n };
+}
+
 /** Rijen voor de deals-tabel: alleen producten waarvan normaal óf holo trend ≥ minTrend. */
 export function buildDeals(joined, { minTrend = 3, history = null } = {}) {
   const rows = [];
@@ -160,10 +180,12 @@ export function buildDeals(joined, { minTrend = 3, history = null } = {}) {
     if (best < minTrend) continue;
     const en = history ? history.n[p.id] : null;
     const eh = history ? history.h[p.id] : null;
+    const sn = saleChangeDays(en); const sh = saleChangeDays(eh);
     rows.push([p.id, p.name, p.exp, ...p.n, ...p.h,
       en ? priorMin(en) : null, eh ? priorMin(eh) : null,
       en ? yesterdayLow(en) : null, eh ? yesterdayLow(eh) : null,
-      en ? daysAtSameLow(en) : 0, eh ? daysAtSameLow(eh) : 0]);
+      en ? daysAtSameLow(en) : 0, eh ? daysAtSameLow(eh) : 0,
+      sn.days, sh.days, sn.n, sh.n]);
   }
   rows.sort((a, b) => a[0] - b[0]);
   return rows;

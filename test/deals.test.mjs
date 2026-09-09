@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import {
   variantSuffix, normalizeGuide, parseDate, joinProducts, discount,
   buildDeals, buildIndex, buildShards, buildExpansions, shardOf, hasAnyPrice, updateHistory, priorMin,
-  yesterdayLow, daysAtSameLow, shardHistory, mergeHistoryShards,
+  yesterdayLow, daysAtSameLow, shardHistory, mergeHistoryShards, saleChangeDays,
 } from '../scripts/lib/deals.mjs';
 
 const products = [
@@ -63,8 +63,8 @@ test('discount', () => {
 test('buildDeals filtert op hoogste trend van normaal of holo', () => {
   const rows = buildDeals(joinProducts(products, guides), { minTrend: 10 });
   assert.deepEqual(rows.map((r) => r[0]), [10, 11]); // 10 via holo-trend 12, 11 via trend 100
-  assert.equal(rows[0].length, 19);
-  assert.deepEqual(rows[1], [11, 'Charizard ex', 100, 40, 100, 60, 95, 90, null, null, null, null, null, null, null, null, null, 0, 0]);
+  assert.equal(rows[0].length, 23);
+  assert.deepEqual(rows[1], [11, 'Charizard ex', 100, 40, 100, 60, 95, 90, null, null, null, null, null, null, null, null, null, 0, 0, 0, 0, 0, 0]);
 });
 
 test('buildIndex bevat alle producten gesorteerd op id', () => {
@@ -91,8 +91,8 @@ test('updateHistory voegt een dag toe (laagste + 7d-gem.), lijnt uit, knipt af e
   const joined = joinProducts(products, guides);
   const h1 = updateHistory(null, joined, '2026-09-07', { days: 3, minTrend: 1 });
   assert.deepEqual(h1.dates, ['2026-09-07']);
-  assert.deepEqual(h1.n[10], { l: [2], a: [5] });
-  assert.deepEqual(h1.h[10], { l: [3], a: [11] });
+  assert.deepEqual(h1.n[10], { l: [2], a: [5], s: [4] });
+  assert.deepEqual(h1.h[10], { l: [3], a: [11], s: [10] });
   assert.equal(h1.n[13], undefined); // geen prijs
   assert.equal(h1.n[12], undefined); // trend 0.05 < minTrend
   assert.equal(updateHistory(h1, joined, '2026-09-07', { days: 3, minTrend: 1 }), h1);
@@ -107,10 +107,14 @@ test('updateHistory voegt een dag toe (laagste + 7d-gem.), lijnt uit, knipt af e
   const newProd = [...products, { idProduct: 14, name: 'Nieuw', idExpansion: 100, dateAdded: '0000-00-00 00:00:00' }];
   const newGuides = [...guides, { idProduct: 14, low: 5, trend: 9, avg1: 9, avg7: 9, avg30: 9 }];
   const h5 = updateHistory(h4, joinProducts(newProd, newGuides), '2026-09-11', { days: 3, minTrend: 1 });
-  assert.deepEqual(h5.n[14], { l: [null, null, 5], a: [null, null, 9] });
+  assert.deepEqual(h5.n[14], { l: [null, null, 5], a: [null, null, 9], s: [null, null, 9] });
   // oud formaat (alleen lows-array) wordt omgezet
   const legacy = { dates: ['2026-09-07'], n: { 10: [2] }, h: { 10: [3] } };
-  assert.deepEqual(updateHistory(legacy, joined2, '2026-09-08', { days: 3, minTrend: 1 }).n[10], { l: [2, 1], a: [null, 5] });
+  assert.deepEqual(updateHistory(legacy, joined2, '2026-09-08', { days: 3, minTrend: 1 }).n[10], { l: [2, 1], a: [null, 5], s: [null, 4] });
+  // verkoopdagen: verandering van het 1-daags gemiddelde = verkoop
+  assert.deepEqual(saleChangeDays({ s: [4, 4, 4.5, 4.5, null, 3] }), { days: 1, n: 3 });
+  assert.deepEqual(saleChangeDays({ s: [4, 5, 6, 7] }, 2), { days: 2, n: 2 });
+  assert.deepEqual(saleChangeDays([1, 2]), { days: 0, n: 0 });
   // hulpfuncties
   assert.equal(priorMin({ l: [2, 1] }), 2);
   assert.equal(priorMin([null, null, 5]), null);
@@ -125,7 +129,8 @@ test('updateHistory voegt een dag toe (laagste + 7d-gem.), lijnt uit, knipt af e
   // buildDeals neemt historiekolommen mee
   const rows = buildDeals(joined2, { minTrend: 1, history: h2 });
   const r10 = rows.find((r) => r[0] === 10);
-  assert.equal(r10.length, 19);
+  assert.equal(r10.length, 23);
+  assert.deepEqual(r10.slice(19), [0, 0, 1, 1]); // avg1 bleef 4: geen verkoop gemeten over 1 dagpaar
   assert.equal(r10[13], 2); // prevLow: gisteren was de laagste 2, vandaag 1
   assert.equal(r10[14], 3); // hPrevLow
   assert.equal(r10[15], 2); // yLow
