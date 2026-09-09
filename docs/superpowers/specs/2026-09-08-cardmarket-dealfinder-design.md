@@ -135,6 +135,17 @@ Orchestratie: HEAD-check, vergelijken met live `meta.json`, downloaden, berekene
   zoekpagina. `data/expansions.json` is de seed (767 namen), `scripts/cardmarket-expansions.mjs` vult dagelijks
   aan uit de nieuwste kopie. Alleen sets nieuwer dan de laatste archiefkopie blijven tijdelijk naamloos.
 
+## Vereenvoudiging en conditiemodel (2026-09-09)
+
+Op verzoek teruggebracht tot de basis: tabs Deals, Live, Uitleg; geen opgeslagen lijsten (watchlist,
+voorraad), geen trends, negeerlijst, CSV of digest. Kern is nu het **conditiemodel** per kaart:
+NM-waarde = Cardmarket 7d-verkoopgemiddelde; verhoudingen EX/Good/Played/Poor per kaart uit JustTCG
+(VS-markt) waar beschikbaar, begrensd (≤ 95/85/70/55 %), anders vast (90/75/60/40 %). De
+conditie-onafhankelijke test: laagste ≤ Poor-waarde = **zeker koopje** (standaardweergave);
+laagste ≤ Good-waarde = koopje als Good+. Marge min. rekent met de Poor-waarde. Mobiel: compacte rijen
+(naam + statsregel), acties alleen in het detailpaneel. JustTCG vult dagelijks ~500 kaarten aan
+(25 calls, 10/min) via set-pagina's van de sets met de meeste top-deals.
+
 ## Bekende beperkingen
 
 - Data is dagelijks; het dashboard is hooguit ~30 minuten na publicatie bijgewerkt.

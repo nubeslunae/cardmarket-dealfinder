@@ -50,7 +50,9 @@ export function pricechartingUrl(name, setName) {
 }
 
 /** Sets die op Cardmarket alleen in Aziatische talen bestaan (Japans, Koreaans, Chinees, Thai, Indonesisch). */
-const ASIAN_SET = /japan|korea|chinese|thai|indonesia|taiwan|asia|\bJP\b|\bKR\b|\bTC\b|\bSC\b|\bID\/TH\b/i;
+// Cardmarket zet ook Japanse sets in de westerse catalogus onder hun Japanse naam ("Expansion Pack",
+// "Pokémon Card 151", "Expansion Pack 20th Anniversary"); die vallen hier ook onder.
+const ASIAN_SET = /japan|korea|chinese|thai|indonesia|taiwan|asia|\bJP\b|\bKR\b|\bTC\b|\bSC\b|\bID\/TH\b|expansion pack|expansion sheet|pok[eé]mon card (?!game)|pok[eé]mon web|\bvs series|20th anniversary|25th anniversary collection|starter set(?! v)|premium trainer box|high class pack/i;
 export function isAsianSetName(name) {
   return typeof name === 'string' && ASIAN_SET.test(name);
 }

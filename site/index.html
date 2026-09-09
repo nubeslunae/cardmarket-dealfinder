@@ -16,17 +16,13 @@
     <div class="brand">
       <h1>Cardmarket Deal Finder</h1>
       <p class="sub" id="meta-line">Data laden…</p>
-      <p class="sub clock" id="clock"></p>
     </div>
     <div class="gsearch">
-      <input id="global-search" type="search" placeholder="Zoek kaart (naam, set of set-id)…" autocomplete="off" aria-label="Zoek kaart">
+      <input id="global-search" type="search" placeholder="Zoek kaart of set…" autocomplete="off" aria-label="Zoek kaart">
       <ul id="global-results" class="results" hidden></ul>
     </div>
     <nav class="tabs" role="tablist">
       <button class="tab is-active" data-tab="deals" role="tab">Deals</button>
-      <button class="tab" data-tab="trends" role="tab">Trends</button>
-      <button class="tab" data-tab="watchlist" role="tab">Watch <span class="pill" id="wl-count">0</span></button>
-      <button class="tab" data-tab="inventory" role="tab">Voorraad <span class="pill" id="inv-count">0</span></button>
       <button class="tab" data-tab="live" role="tab">Live</button>
       <button class="tab" data-tab="info" role="tab">Uitleg</button>
     </nav>
@@ -36,24 +32,21 @@
   <main>
     <!-- ================= DEALS ================= -->
     <section id="tab-deals" class="panel is-active">
-      <div class="card today" id="today" hidden></div>
       <details class="filters-wrap" id="filters-wrap" open>
       <summary>Filters <span class="pill" id="filters-desc"></span></summary>
       <form class="filters" id="filters" onsubmit="return false">
-        <label>Signaal
-          <select name="signal">
-            <option value="low">Laagste listing onder referentie</option>
-            <option value="new">Nieuw laag: onder laagste van vorige 7 dagen</option>
-            <option value="sold">Gisteren verkocht onder 7d-gem.</option>
-            <option value="week">Dalend: 7d-gem. onder 30d-gem.</option>
+        <label>Toon
+          <select name="mode">
+            <option value="sure">Zekere koopjes (onder Poor-waarde)</option>
+            <option value="good">Koopjes als Good of beter</option>
+            <option value="all">Alles onder NM-waarde</option>
           </select>
         </label>
-        <label>Referentie
-          <select name="ref">
-            <option value="avg7">7d-verkoopgemiddelde</option>
-            <option value="avg30">30d-verkoopgemiddelde</option>
-            <option value="trend">Trend</option>
-          </select>
+        <label>Waarde vanaf €
+          <input name="minRef" type="number" min="0" step="1" value="10" inputmode="decimal" title="7-daags verkoopgemiddelde op Cardmarket">
+        </label>
+        <label>Laagste tot €
+          <input name="maxLow" type="number" min="0" step="1" placeholder="∞" inputmode="decimal">
         </label>
         <label>Variant
           <select name="variant">
@@ -61,27 +54,6 @@
             <option value="h">Holo / reverse</option>
             <option value="both">Beide</option>
           </select>
-        </label>
-        <label>Trend € van
-          <input name="minTrend" type="number" min="0" step="1" value="10" inputmode="decimal">
-        </label>
-        <label>tot
-          <input name="maxTrend" type="number" min="0" step="1" placeholder="∞" inputmode="decimal">
-        </label>
-        <label>Laagste € van
-          <input name="minLow" type="number" min="0" step="1" placeholder="0" inputmode="decimal">
-        </label>
-        <label>tot
-          <input name="maxLow" type="number" min="0" step="1" placeholder="∞" inputmode="decimal">
-        </label>
-        <label>Eronder % van
-          <input name="minDisc" type="number" min="0" max="100" step="5" value="25" inputmode="numeric">
-        </label>
-        <label>tot
-          <input name="maxDisc" type="number" min="0" max="100" step="5" value="70" inputmode="numeric" title="Boven ~70 % is de goedkoopste listing vrijwel altijd een beschadigd of anderstalig exemplaar">
-        </label>
-        <label>Min. marge €
-          <input name="minMargin" type="number" step="1" placeholder="geen" inputmode="decimal" title="Marge = referentie × (1 − commissie) − laagste − verzending">
         </label>
         <label>Set zoeken
           <input name="expq" type="search" placeholder="typ om sets te filteren">
@@ -91,52 +63,42 @@
         </label>
         <label>Sorteer
           <select name="sort">
-            <option value="margin">marge € ↓</option>
-            <option value="gap">verschil € ↓</option>
-            <option value="score">% eronder ↓</option>
-            <option value="trend">trend ↓</option>
+            <option value="marginMin">marge (zelfs als Poor) ↓</option>
+            <option value="marginGood">marge (als Good+) ↓</option>
+            <option value="score">% onder Poor-waarde ↓</option>
             <option value="low">laagste ↑</option>
-            <option value="name">naam</option>
+            <option value="ref">waarde ↓</option>
           </select>
         </label>
         <label class="grow">Zoek
-          <input name="q" type="search" placeholder="naam, deel van naam, of set-id">
+          <input name="q" type="search" placeholder="naam of set-id">
         </label>
-        <label class="check" title="Verbergt kaarten waarvan de laagste gisteren al (vrijwel) dezelfde prijs had: een echt koopje is binnen een dag weg, dus wat blijft staan is meestal beschadigd, anderstalig of verborgen. Werkt zodra er 2 dagen historie is."><input name="hideStale" type="checkbox" checked> verberg wat gisteren al zo laag stond</label>
-        <label class="check"><input name="onlyDouble" type="checkbox"> alleen dubbel signaal</label>
-        <label class="check"><input name="hideWatched" type="checkbox"> verberg watchlist</label>
-        <label class="check"><input name="showIgnored" type="checkbox"> toon genegeerde <span class="pill" id="ignored-count">0</span></label>
-        <label class="check" title="Verbergt kaarten waarvan trend, 7d- en 30d-gemiddelde meer dan 3× uiteenlopen, of waarvan de laagste listing onder 10 % van de trend of onder €1 ligt."><input name="plausibleOnly" type="checkbox" checked> verberg onwaarschijnlijke</label>
-        <label class="check" title="Verbergt sets die alleen in Japans, Koreaans, Chinees, Thai of Indonesisch bestaan. Binnen westerse sets zit de taal per listing niet in de dagelijkse data."><input name="hideAsian" type="checkbox" checked> verberg Aziatische sets</label>
+        <label class="check" title="Een echt koopje is binnen een dag weg. Wat gisteren al zo laag stond is meestal beschadigd, anderstalig of verborgen."><input name="hideStale" type="checkbox" checked> verberg wat gisteren al zo laag stond</label>
+        <label class="check" title="Verbergt Aziatische sets en kaarten met tegenstrijdige referenties of een laagste onder €1."><input name="plausibleOnly" type="checkbox" checked> verberg onwaarschijnlijke</label>
+        <label class="check" title="Alleen kaarten waarvoor echte conditie-verhoudingen uit de VS-markt (JustTCG) beschikbaar zijn"><input name="onlyRatio" type="checkbox"> alleen met VS-conditiedata</label>
         <button type="button" class="btn" id="filters-reset">Reset</button>
-        <button type="button" class="btn" id="deals-csv" title="Huidige treffers als CSV (Excel)">CSV</button>
-        <button type="button" class="btn" id="deals-share" title="Kopieer een link met deze filters">Deel filters</button>
       </form>
       <form class="filters slim costs" id="costs" onsubmit="return false">
-        <span class="lbl">Marge-instellingen</span>
+        <span class="lbl">Marge</span>
         <label>Verkoopcommissie % <input name="sellCommissionPct" type="number" min="0" max="30" step="0.5" value="5" inputmode="decimal"></label>
         <label>Verzending bij inkoop € <input name="buyShipping" type="number" min="0" step="0.1" value="1.5" inputmode="decimal"></label>
-        <span class="hint">Marge = referentie × (1 − commissie) − laagste − verzending. Conditie en taal van de laagste listing zijn onbekend, dus dit is een bovengrens.</span>
+        <span class="hint">Marge = conditiewaarde × (1 − commissie) − laagste − verzending. "Zelfs als Poor" rekent met de Poor-waarde en is dus veilig; "als Good+" met de Good-waarde.</span>
       </form>
       </details>
       <p class="summary" id="deals-summary"></p>
       <div class="table-wrap">
-        <table class="grid" id="deals-table">
+        <table class="grid compact" id="deals-table">
           <thead>
             <tr>
-              <th data-sort="name">Kaart</th>
-              <th class="opt">Set</th>
-              <th class="num" data-sort="low" title="Goedkoopste listing vandaag, élke conditie en taal">Laagste</th>
-              <th class="opt" title="Versheid t.o.v. gisteren (historie)">Sinds</th>
-              <th class="num" data-sort="margin" title="Referentie × (1 − commissie) − laagste − verzending">Marge</th>
-              <th class="num opt" title="Laagste 'laagste' van de vorige 7 dagen">Vorige 7d</th>
-              <th class="num opt" data-sort="trend">Trend</th>
-              <th class="num opt" title="Gemiddelde verkoopprijs gisteren">Gem. 1d</th>
-              <th class="num" title="Gemiddelde verkoopprijs 7 dagen">Gem. 7d</th>
-              <th class="num opt" title="Gemiddelde verkoopprijs 30 dagen">Gem. 30d</th>
-              <th class="num opt" data-sort="gap" title="Referentie − laagste, in euro">Verschil</th>
-              <th class="num" data-sort="score" title="Percentage onder de gekozen referentie">Eronder</th>
-              <th></th>
+              <th data-sort="low">Kaart</th>
+              <th class="num opt" data-sort="low" title="Goedkoopste listing vandaag, élke conditie en taal">Laagste</th>
+              <th class="opt" title="Versheid t.o.v. gisteren">Sinds</th>
+              <th class="num opt" data-sort="ref" title="Waarde in Near Mint (Cardmarket 7d-verkoopgemiddelde)">NM</th>
+              <th class="num opt" title="Waarde als Good">Good</th>
+              <th class="num opt" title="Waarde als Poor (ondergrens)">Poor</th>
+              <th class="num opt" data-sort="marginMin" title="Marge zelfs als het exemplaar Poor is">Marge min.</th>
+              <th class="num opt" data-sort="marginGood" title="Marge als het exemplaar Good of beter is">Marge Good+</th>
+              <th class="opt"></th>
             </tr>
           </thead>
           <tbody></tbody>
@@ -145,316 +107,120 @@
       <div class="more"><button id="deals-more" class="btn" hidden>Toon meer</button></div>
     </section>
 
-    <!-- ================= TRENDS ================= -->
-    <section id="tab-trends" class="panel">
-      <form class="filters" id="trend-filters" onsubmit="return false">
-        <label>Periode
-          <select name="period">
-            <option value="d1">Gisteren vs 7d-gem.</option>
-            <option value="w1">7d-gem. vs 30d-gem.</option>
-            <option value="lowc">Laagste vs 7 dagen geleden (historie)</option>
-          </select>
-        </label>
-        <label>Richting
-          <select name="dir"><option value="up">Stijgers</option><option value="down">Dalers</option></select>
-        </label>
-        <label>Variant
-          <select name="variant"><option value="n">Normaal</option><option value="h">Holo</option><option value="both">Beide</option></select>
-        </label>
-        <label>Min. trend € <input name="minTrend" type="number" min="0" step="1" value="5" inputmode="decimal"></label>
-        <label>Min. verandering % <input name="minChange" type="number" min="0" step="5" value="15" inputmode="numeric"></label>
-        <label class="grow">Zoek <input name="q" type="search" placeholder="naam of set"></label>
-        <label class="check"><input name="hideAsian" type="checkbox" checked> verberg Aziatische sets</label>
-      </form>
-      <p class="summary" id="trend-summary"></p>
-      <div class="table-wrap">
-        <table class="grid" id="trend-table">
-          <thead>
-            <tr>
-              <th>Kaart</th><th class="opt">Set</th><th class="num">Van</th><th class="num">Naar</th><th class="num">Verandering</th>
-              <th class="num opt">Laagste</th><th class="num opt">Trend</th><th></th>
-            </tr>
-          </thead>
-          <tbody></tbody>
-        </table>
-      </div>
-    </section>
-
-    <!-- ================= WATCHLIST ================= -->
-    <section id="tab-watchlist" class="panel">
-      <div class="wl-add">
-        <label class="grow">Kaart toevoegen
-          <input id="wl-search" type="search" placeholder="typ minstens 3 tekens, bijv. Charizard ex" autocomplete="off">
-        </label>
-        <ul id="wl-results" class="results" hidden></ul>
-      </div>
-      <form class="filters slim" id="wl-filters" onsubmit="return false">
-        <label class="grow">Filter
-          <input name="q" type="search" placeholder="naam of set">
-        </label>
-        <label>Toon
-          <select name="show">
-            <option value="all">alles</option>
-            <option value="hits">alleen onder max</option>
-            <option value="nomax">zonder max</option>
-          </select>
-        </label>
-        <label>Sorteer
-          <select name="sort">
-            <option value="status">status</option>
-            <option value="name">naam</option>
-            <option value="low">laagste ↑</option>
-            <option value="trend">trend ↓</option>
-            <option value="added">toegevoegd</option>
-          </select>
-        </label>
-      </form>
-      <p class="summary" id="wl-summary"></p>
-      <div class="table-wrap">
-        <table class="grid" id="wl-table">
-          <thead>
-            <tr>
-              <th>Kaart</th>
-              <th class="opt">Set</th>
-              <th>Variant</th>
-              <th class="num">Max €</th>
-              <th class="num" title="75 % van het 7-daags verkoopgemiddelde, als startpunt voor je koopprijs">Voorstel</th>
-              <th class="num">Laagste</th>
-              <th class="opt" title="Laagste per dag, laatste 60 dagen">Verloop</th>
-              <th class="num opt">Trend</th>
-              <th class="num opt">Gem. 7d</th>
-              <th>Status</th>
-              <th></th>
-            </tr>
-          </thead>
-          <tbody></tbody>
-        </table>
-      </div>
-      <div class="wl-actions">
-        <button class="btn" id="wl-copy-names">Kopieer voor wants list (Good+, Engels)</button>
-        <button class="btn" id="wl-export">Exporteer JSON</button>
-        <button class="btn" id="wl-import">Importeer JSON</button>
-        <button class="btn" id="wl-live">Live checken op CardTrader →</button>
-        <span id="wl-msg" class="msg"></span>
-      </div>
-      <textarea id="wl-io" class="io" rows="6" hidden spellcheck="false"></textarea>
-    </section>
-
-    <!-- ================= VOORRAAD ================= -->
-    <section id="tab-inventory" class="panel">
-      <div class="card"><div class="card-body inv-summary" id="inv-summary"></div></div>
-      <div class="wl-add">
-        <label class="grow">Kaart toevoegen aan voorraad
-          <input id="inv-search" type="search" placeholder="typ minstens 3 tekens" autocomplete="off">
-        </label>
-        <ul id="inv-results" class="results" hidden></ul>
-      </div>
-      <p class="summary" id="inv-note">Waarde nu = Cardmarket 7d-verkoopgemiddelde; netto = waarde × (1 − commissie). Betaald en aantal zijn aanpasbaar in de tabel.</p>
-      <div class="table-wrap">
-        <table class="grid" id="inv-table">
-          <thead>
-            <tr>
-              <th>Kaart</th><th class="opt">Set</th><th>Variant</th><th class="num">Aantal</th><th class="num">Betaald p/st</th>
-              <th class="num">Waarde nu</th><th class="num opt">Netto p/st</th><th class="num">Winst</th><th class="num opt">Winst %</th><th class="opt">Verloop</th><th></th>
-            </tr>
-          </thead>
-          <tbody></tbody>
-        </table>
-      </div>
-      <div class="wl-actions">
-        <button class="btn" id="inv-export">Exporteer JSON</button>
-        <button class="btn" id="inv-import">Importeer JSON</button>
-        <button class="btn" id="inv-csv">CSV</button>
-        <span id="inv-msg" class="msg"></span>
-      </div>
-      <textarea id="inv-io" class="io" rows="6" hidden spellcheck="false"></textarea>
-    </section>
-
     <!-- ================= LIVE (CARDTRADER) ================= -->
     <section id="tab-live" class="panel">
-      <p class="hint strong">Dit is de enige plek waar "alleen Good of beter, alleen Engels" hard wordt afgedwongen: elke CardTrader-listing heeft conditie en taal. Standaardfilters staan daarop.</p>
-      <div class="live-grid">
-        <details class="card" open id="ct-connection">
-          <summary>Verbinding met CardTrader</summary>
-          <div class="card-body">
-            <p class="hint">Gratis account → profiel → instellingen → API → token. Het token blijft in deze browser (localStorage) en gaat rechtstreeks naar <code>api.cardtrader.com</code>; er zit geen server tussen.</p>
-            <div class="row">
-              <input id="ct-token" type="password" placeholder="Bearer-token" autocomplete="off" class="grow">
-              <button class="btn" id="ct-save">Opslaan</button>
-              <button class="btn" id="ct-test">Test</button>
-              <button class="btn" id="ct-forget">Vergeten</button>
-            </div>
-            <p class="msg" id="ct-status">Nog geen token.</p>
-            <p class="msg" id="ct-map-status"></p>
+      <p class="hint strong">Hier heeft elke listing conditie en taal (CardTrader). Standaard: Engels, Good/Moderately Played of beter.</p>
+      <details class="card" open id="ct-connection">
+        <summary>Verbinding met CardTrader</summary>
+        <div class="card-body">
+          <p class="hint">Gratis account → profiel → instellingen → API → token. Het token blijft in deze browser en gaat rechtstreeks naar <code>api.cardtrader.com</code>.</p>
+          <div class="row">
+            <input id="ct-token" type="password" placeholder="Bearer-token" autocomplete="off" class="grow">
+            <button class="btn" id="ct-save">Opslaan</button>
+            <button class="btn" id="ct-test">Test</button>
+            <button class="btn" id="ct-forget">Vergeten</button>
           </div>
-        </details>
-
-        <details class="card" id="ct-settings">
-          <summary>Kosten &amp; filters (landed cost)</summary>
-          <form class="card-body settings" id="ct-settings-form" onsubmit="return false">
-            <label>Zero-fee % <input name="zeroFeePct" type="number" min="0" max="50" step="0.5" inputmode="decimal"></label>
-            <label>Zero-verzending €/order <input name="zeroShippingPerOrder" type="number" min="0" step="0.1" inputmode="decimal"></label>
-            <label>Kaarten per hub-order <input name="expectedBasketSize" type="number" min="1" step="1" inputmode="numeric"></label>
-            <label>Verzending €/verkoper (niet-hub) <input name="sellerShippingDefault" type="number" min="0" step="0.1" inputmode="decimal"></label>
-            <label>Verkoopcommissie % <input name="sellCommissionPct" type="number" min="0" max="30" step="0.5" inputmode="decimal"></label>
-            <label>Min. conditie
-              <select name="minCondition">
-                <option value="5">Mint</option><option value="4">Near Mint</option><option value="3">Excellent / Slightly Played</option>
-                <option value="2">Good / Moderately Played</option><option value="1">Played</option><option value="0">Poor (alles)</option>
-              </select>
-            </label>
-            <label>Talen (bv. en,de,nl) <input name="languages" type="text" placeholder="alle"></label>
-            <label>Verkoperlanden (bv. NL,DE,BE) <input name="countries" type="text" placeholder="alle"></label>
-            <label class="check"><input name="hubOnly" type="checkbox"> alleen CardTrader Zero (hub)</label>
-            <label class="check"><input name="excludeVacation" type="checkbox"> verkopers op vakantie negeren</label>
-            <label class="check"><input name="excludeGraded" type="checkbox"> graded negeren</label>
-            <p class="hint full">Haircut op referentiewaarde per conditie: NM/M 0 %, SP/EX 10 %, MP/Good 25 %, PL 40 %, PO 60 %. Marge = trend × (1 − commissie) × (1 − haircut) − landed cost.</p>
-          </form>
-        </details>
-      </div>
-
+          <p class="msg" id="ct-status">Nog geen token.</p>
+          <p class="msg" id="ct-map-status"></p>
+        </div>
+      </details>
+      <details class="card" id="ct-settings">
+        <summary>Kosten &amp; filters</summary>
+        <form class="card-body settings" id="ct-settings-form" onsubmit="return false">
+          <label>Zero-fee % <input name="zeroFeePct" type="number" min="0" max="50" step="0.5" inputmode="decimal"></label>
+          <label>Zero-verzending €/order <input name="zeroShippingPerOrder" type="number" min="0" step="0.1" inputmode="decimal"></label>
+          <label>Kaarten per hub-order <input name="expectedBasketSize" type="number" min="1" step="1" inputmode="numeric"></label>
+          <label>Verzending €/verkoper <input name="sellerShippingDefault" type="number" min="0" step="0.1" inputmode="decimal"></label>
+          <label>Verkoopcommissie % <input name="sellCommissionPct" type="number" min="0" max="30" step="0.5" inputmode="decimal"></label>
+          <label>Min. conditie
+            <select name="minCondition">
+              <option value="5">Mint</option><option value="4">Near Mint</option><option value="3">Excellent / Slightly Played</option>
+              <option value="2">Good / Moderately Played</option><option value="1">Played</option><option value="0">Poor (alles)</option>
+            </select>
+          </label>
+          <label>Talen (bv. en,de) <input name="languages" type="text" placeholder="alle"></label>
+          <label>Verkoperlanden (bv. NL,DE) <input name="countries" type="text" placeholder="alle"></label>
+          <label class="check"><input name="hubOnly" type="checkbox"> alleen CardTrader Zero</label>
+          <label class="check"><input name="excludeVacation" type="checkbox"> vakantie negeren</label>
+          <label class="check"><input name="excludeGraded" type="checkbox"> graded negeren</label>
+        </form>
+      </details>
       <div class="live-actions card">
         <div class="card-body">
           <div class="row wrap">
-            <button class="btn primary" id="ct-check-watchlist">Watchlist live checken</button>
-            <span class="sep"></span>
             <label class="grow">Sets scannen (meerdere mogelijk)
               <input id="ct-exp-search" type="search" placeholder="zoek set op naam of code" autocomplete="off">
             </label>
             <select id="ct-exp-select" multiple size="6" class="grow"></select>
-            <button class="btn" id="ct-scan">Scan geselecteerde sets</button>
+            <button class="btn primary" id="ct-scan">Scan geselecteerde sets</button>
             <button class="btn" id="ct-stop" hidden>Stop</button>
           </div>
           <div class="progress" id="ct-progress" hidden><div class="bar"></div><span class="label"></span></div>
           <p class="msg" id="ct-msg"></p>
         </div>
       </div>
-
       <form class="filters" id="live-filters" onsubmit="return false">
-        <label>Vergelijk met
-          <select name="ref">
-            <option value="avg7">Cardmarket 7d-gem.</option>
-            <option value="trend">Cardmarket trend</option>
-            <option value="low">Cardmarket laagste</option>
-          </select>
-        </label>
-        <label>Min. eronder % <input name="minDisc" type="number" min="-100" max="100" step="5" value="20" inputmode="numeric"></label>
         <label>Min. marge € <input name="minMargin" type="number" step="1" placeholder="geen" inputmode="decimal"></label>
-        <label>Min. referentie € <input name="minRef" type="number" min="0" step="1" value="5" inputmode="decimal"></label>
-        <label>Prijs € van <input name="minPrice" type="number" min="0" step="1" placeholder="0" inputmode="decimal"></label>
-        <label>tot <input name="maxPrice" type="number" min="0" step="1" placeholder="∞" inputmode="decimal"></label>
-        <label>Variant
-          <select name="variant"><option value="both">beide</option><option value="n">normaal</option><option value="h">holo / reverse</option></select>
-        </label>
+        <label>Min. waarde € <input name="minRef" type="number" min="0" step="1" value="5" inputmode="decimal"></label>
+        <label>Prijs tot € <input name="maxPrice" type="number" min="0" step="1" placeholder="∞" inputmode="decimal"></label>
         <label>Sorteer
-          <select name="sort">
-            <option value="margin">marge ↓</option><option value="disc">eronder ↓</option><option value="landed">landed ↑</option>
-            <option value="price">prijs ↑</option><option value="ref">referentie ↓</option><option value="name">naam</option>
-          </select>
+          <select name="sort"><option value="margin">marge ↓</option><option value="disc">eronder ↓</option><option value="price">prijs ↑</option><option value="name">naam</option></select>
         </label>
         <label class="grow">Zoek <input name="q" type="search" placeholder="kaart, verkoper, set"></label>
-        <label class="check"><input name="onlyWatch" type="checkbox"> alleen watchlist</label>
-        <label class="check"><input name="onlyUnmatched" type="checkbox"> zonder Cardmarket-match</label>
       </form>
-      <p class="summary" id="live-summary">Nog geen live data. Sla je token op en klik "Watchlist live checken" of scan sets.</p>
+      <p class="summary" id="live-summary">Nog geen live data. Sla je token op en scan één of meer sets.</p>
       <div class="table-wrap">
-        <table class="grid" id="live-table">
+        <table class="grid compact" id="live-table">
           <thead>
             <tr>
-              <th>Kaart</th><th class="opt">Set</th><th>Cond.</th><th class="opt">Taal</th><th>Verkoper</th>
-              <th class="num">Prijs</th><th class="num opt">Landed</th><th class="num opt">Referentie</th>
-              <th class="num">Eronder</th><th class="num">Marge</th><th></th>
+              <th>Kaart</th><th class="opt">Cond.</th><th class="opt">Verkoper</th>
+              <th class="num opt">Prijs</th><th class="num opt">Landed</th><th class="num opt">Waarde (cond.)</th>
+              <th class="num opt">Marge</th><th class="opt"></th>
             </tr>
           </thead>
           <tbody></tbody>
         </table>
       </div>
       <div class="more"><button id="live-more" class="btn" hidden>Toon meer</button></div>
-
-      <div class="card basket" id="basket">
-        <div class="card-body">
-          <div class="row wrap">
-            <h2>Mandje-optimalisatie voor je watchlist</h2>
-            <button class="btn" id="basket-run">Bereken goedkoopste combinatie</button>
-          </div>
-          <p class="hint">Hub-verkopers (CardTrader Zero) tellen als één zending; een losse verkoper komt er alleen bij als zijn besparing zijn verzendkosten dekt. Gebruikt de watchlist-maxima als bovengrens en de live resultaten van de laatste watchlist-check.</p>
-          <div id="basket-out"></div>
-        </div>
-      </div>
     </section>
 
     <!-- ================= INFO ================= -->
     <section id="tab-info" class="panel">
       <div class="prose">
-        <h2>Alleen Good of beter, alleen Engels: wat kan en wat niet</h2>
-        <p>De Cardmarket-dagbestanden bevatten per kaart alleen laagste, trend en verkoopgemiddelden (plus dezelfde velden voor holo). <strong>Geen conditie, geen taal, geen verkoper.</strong> Het veld "laagste in Excellent of beter" dat de oude Cardmarket-API had, zit niet in het downloadbestand, en de laatste gratis bron die het doorgaf (pokemontcg.io) is sinds november 2025 niet meer ververst. Conditie en taal kunnen daarom nergens uit de dagdata komen. Ze worden hard afgedwongen op precies twee plekken:</p>
+        <h2>Hoe de deals worden gevonden</h2>
+        <p>Cardmarket publiceert dagelijks (rond 02:45) per kaart de goedkoopste listing (élke conditie en taal), de trend en de verkoopgemiddelden. Conditie en taal van die goedkoopste listing zijn onbekend. Daarom rekent dit dashboard per kaart een <strong>waarde per conditie</strong> uit en test conditie-onafhankelijk:</p>
         <ul>
-          <li><strong>Live-tab (CardTrader)</strong>: elke listing heeft conditie en taal; standaard staan de filters op Engels en Good/Moderately Played of beter. Vereist een gratis CardTrader-account en het token uit je profiel.</li>
-          <li><strong>Cardmarket wants list</strong>: per kaart <em>Language: English</em>, <em>Min. condition: Good</em>, <em>Buy price</em> en <em>Email Alarm</em>. De knop "Kopieer voor wants list" op de Watchlist-tab levert naam, set, variant en koopprijs met die voorwaarden erbij.</li>
+          <li><strong>Zeker koopje</strong>: de laagste ligt zelfs onder de Poor-waarde. Wat de conditie ook is, het exemplaar is te goedkoop. Dit is de standaardweergave.</li>
+          <li><strong>Koopje als Good of beter</strong>: de laagste ligt onder de Good-waarde. Loont alleen als het exemplaar Good of beter blijkt; klik door en kijk naar de conditie.</li>
         </ul>
-        <p>Op de Deals-tab is de marge daarom een <strong>bovengrens</strong>: ze rekent met de goedkoopste listing in élke conditie en taal.</p>
+        <p>De waarde per conditie: NM = Cardmarket 7-daags verkoopgemiddelde. De verhoudingen voor lagere condities komen uit de <strong>VS-markt (TCGplayer via JustTCG)</strong> waar beschikbaar (echte marktdata per conditie: NM/LP/MP/HP/DMG, per kaart), anders uit vaste percentages (EX 90 %, Good 75 %, Played 60 %, Poor 40 %). Kaarten met VS-data krijgen het label <span class="badge accent">VS-ratio</span>; het aantal groeit dagelijks met ~500.</p>
+        <p><strong>Marge</strong> = conditiewaarde × (1 − verkoopcommissie) − laagste − verzending. "Marge min." rekent met de Poor-waarde en is dus een veilige ondergrens; "Marge Good+" met de Good-waarde.</p>
+        <p><strong>Sinds</strong> (versheid) komt uit de dagelijkse historie: een echt koopje is binnen een dag weg. Wat gisteren al zo laag stond is meestal beschadigd, anderstalig of verborgen, en wordt standaard verborgen.</p>
 
-        <h2>Waar komen goede prijzen per kaart én conditie vandaan? (onderzoek)</h2>
-        <table class="facts-table">
-          <tr><th>Bron</th><th>Conditie?</th><th>Kosten / toegang</th><th>Oordeel</th></tr>
-          <tr><td>Cardmarket dagbestanden</td><td>nee</td><td>gratis, geen account</td><td>referentie (EU), basis van dit dashboard</td></tr>
-          <tr><td>CardTrader API</td><td>ja, per listing + taal</td><td>gratis token uit je profiel</td><td><strong>beste EU-koopbron</strong>; al ingebouwd (Live-tab)</td></tr>
-          <tr><td>JustTCG API</td><td>ja: NM/LP/MP/HP/DMG (TCGplayer, USD)</td><td>gratis tier: 100 requests/dag, 20 kaarten per request</td><td><strong>aanvragen waard</strong> als conditie-referentie voor ~2.000 kaarten/dag; koppeling via kaartnummer (TCGdex)</td></tr>
-          <tr><td>eBay Browse API</td><td>ja: conditie-descriptors (graded/ungraded, Card Condition)</td><td>gratis developer-account</td><td>EU-listings met conditie, ruis; verkochte prijzen niet gratis</td></tr>
-          <tr><td>TCG API (tcgapi.dev)</td><td>alleen betaald ($49/mnd)</td><td>gratis tier zonder conditie</td><td>nee</td></tr>
-          <tr><td>Scrydex</td><td>ja + PSA-populaties</td><td>vanaf $29/mnd</td><td>nee (kosten)</td></tr>
-          <tr><td>PriceCharting</td><td>ongegradeerd + PSA-grades</td><td>betaald, niet in publieke app</td><td>alleen als link (PSA ↗)</td></tr>
-          <tr><td>TCGplayer API</td><td>ja</td><td>gesloten voor nieuwe aanvragen</td><td>nee</td></tr>
-          <tr><td>pokemontcg.io</td><td>had EX+ van Cardmarket</td><td>gratis</td><td>data sinds nov 2025 niet ververst</td></tr>
-        </table>
-        <p>Advies: CardTrader-token zetten (direct effect), en een gratis JustTCG-sleutel aanvragen; met die sleutel als repository-secret <code>JUSTTCG_API_KEY</code> kan de pipeline dagelijks conditie-prijzen (NM/LP/MP, in USD omgerekend naar EUR) ophalen voor je watchlist en de beste deals.</p>
-
-        <h2>Wat "laagste" en "trend" echt betekenen</h2>
-        <p>Gecontroleerd op gearchiveerde Cardmarket-productpagina's: het veld <em>laagste</em> is exact de "From"-prijs op de productpagina, dus de goedkoopste listing in <strong>élke conditie en taal</strong>. Arceus LV.X "From €4,99" bij trend €38,54 blijkt een Poor-exemplaar. Bij goedkope commons staat "From €0,02" tegenover trend €0,20 tot €0,30 met tientallen NM-listings op €0,02. Cardmarket's trend en verkoopgemiddelden liggen dus <strong>structureel ver boven de goedkoopste listing</strong>, ook bij NM: kopers betalen meer omdat ze bij één verkoper bundelen, en de trend is een traag gewogen gemiddelde.</p>
-
-        <h2>Versheid: staat de deal er sinds gisteren al?</h2>
-        <p>Een echt koopje is binnen een dag weg. De historie (60 dagen laagste en 7d-gemiddelde per kaart) geeft per kaart een vlag: <strong>nieuw laag</strong> (duidelijk onder de laagste van de vorige 7 dagen), <strong>lager dan gisteren</strong>, <strong>stond gisteren al</strong> (zelfde prijs: waarschijnlijk beschadigd, anderstalig of verborgen) of <strong>hoger</strong>. Het filter "verberg wat gisteren al zo laag stond" staat standaard aan en werkt zodra er twee dagen historie zijn.</p>
-
-        <h2>De signalen op de Deals-tab</h2>
-        <ul>
-          <li><strong>Nieuw laag.</strong> De laagste van vandaag ligt duidelijk onder de laagste van de vorige zeven dagen: er is een goedkoop exemplaar bijgekomen.</li>
-          <li><strong>Laagste listing onder referentie.</strong> Het klassieke "From"-versus-gemiddelde. Shortlist; klik altijd door.</li>
-          <li><strong>Gisteren verkocht onder 7d-gemiddelde.</strong> Echte transacties van gisteren ver onder het weekgemiddelde.</li>
-          <li><strong>Dalend.</strong> 7d-gemiddelde onder 30d-gemiddelde.</li>
-        </ul>
-        <p>"Dubbel" = laagste onder referentie én gisteren goedkoop verkocht. Onder de €10 eet verzending de marge op; vandaar de standaardgrens.</p>
-
-        <h2>Waarom vind ik een lage "laagste" niet terug? Doe deze test</h2>
+        <h2>Waarom vind ik een lage "laagste" niet terug?</h2>
         <ol>
-          <li><strong>"From" toont dezelfde lage prijs, maar je ziet geen listing.</strong> Verborgen verkoper: vakantie, verzendt niet naar NL, of taalfilter. Zet op de productpagina "Language", "Seller location" en "Min. condition" op alles.</li>
-          <li><strong>"From" is hoger dan onze "laagste".</strong> Sinds ~02:48 verkocht.</li>
-          <li><strong>De listing staat er, maar is beschadigd, anderstalig of een bundel.</strong> Het normale geval bij grote verschillen.</li>
+          <li>De productpagina toont dezelfde "From"-prijs maar geen listing: verborgen verkoper (vakantie, verzendt niet naar NL, of je taalfilter). Zet "Language", "Seller location" en "Min. condition" op alles.</li>
+          <li>"From" is hoger: sinds ~02:45 verkocht.</li>
+          <li>De listing staat er, maar is beschadigd, anderstalig of een bundel.</li>
         </ol>
 
-        <h2>Zo koop je goedkoop, in de praktijk</h2>
+        <h2>Zo koop je</h2>
         <ol>
-          <li><strong>Watchlist vullen</strong> met de kaarten die je wilt, met een maximumprijs (of het voorstel: 75 % van het 7d-gemiddelde).</li>
-          <li><strong>Cardmarket wants list met Email Alarm</strong>: Buying → My Wants → nieuwe lijst, kaarten toevoegen, per kaart Engels, Min. condition Good, Buy price en Email Alarm aan. Cardmarket mailt zodra een passende listing verschijnt.</li>
-          <li><strong>Cardmarket Shopping Wizard</strong> (Buying → Shopping Wizard) voor de goedkoopste verkopercombinatie inclusief verzending.</li>
-          <li><strong>CardTrader-tab</strong> voor echte listings met conditie en taal, landed cost en een mandje over verkopers heen.</li>
+          <li>Open een kaart (tik op de naam): afbeelding, nummer, waarde per conditie, grafiek en links naar de exacte kaart en set op Cardmarket.</li>
+          <li>Wil je alerts in je voorwaarden (Engels, Good+)? Gebruik in het detailpaneel "Kopieer voor wants list" en zet die kaart in Cardmarket → Buying → My Wants met Language English, Min. condition Good, Buy price en Email Alarm. Cardmarket mailt zodra een passende listing verschijnt.</li>
+          <li>Live-tab (CardTrader, gratis token): echte listings met conditie en taal, landed cost en marge per listing.</li>
         </ol>
 
-        <h2>Kaartdetail, afbeeldingen en nummers</h2>
-        <p>Klik op een kaartnaam voor het detailpaneel: afbeelding, kaartnummer en setcode (via de open TCGdex-database, die per kaart het Cardmarket-productnummer meelevert; ~19.000 van de 73.000 Cardmarket-producten zijn gekoppeld, vooral westerse sets), 60-daagse grafiek van laagste en 7d-gemiddelde, richtprijs per conditie, versheid, en alle links. De zoekbalk bovenaan doorzoekt de hele catalogus.</p>
-
-        <h2>Trends en voorraad</h2>
-        <p><strong>Trends</strong> toont stijgers en dalers (gisteren vs week, week vs maand, of laagste vs 7 dagen geleden). <strong>Voorraad</strong> houdt bij wat je gekocht hebt (aantal, betaald) en zet daar de huidige Cardmarket-waarde en de netto winst na commissie tegenover; export naar JSON of CSV.</p>
-
-        <h2>Handig om te weten</h2>
+        <h2>Bronnen</h2>
         <ul>
-          <li><strong>Timer</strong> in de kop: wanneer het volgende Cardmarket-bestand verwacht wordt (dagelijks rond 02:48). De pagina kijkt elke 10 minuten en toont "Herladen" bij nieuwe data.</li>
-          <li><strong>Negeer</strong> verbergt een kaart voortaan; "toon genegeerde" haalt hem terug.</li>
-          <li><strong>Deel filters</strong> kopieert een link met je filters (bladwijzer op je telefoon). <strong>CSV</strong> exporteert de treffers voor Excel.</li>
-          <li><strong>Op je telefoon</strong>: voeg de site toe aan je beginscherm; filters staan achter één knop en tabellen tonen alleen kernkolommen.</li>
-          <li><strong>Dagelijkse Telegram-digest</strong> (optioneel): secrets <code>TELEGRAM_BOT_TOKEN</code> en <code>TELEGRAM_CHAT_ID</code> plus je watchlist-export als <code>data/watchlist.json</code>.</li>
-          <li>Watchlist, voorraad, filters, token en instellingen staan alleen in deze browser (localStorage). Maak af en toe een JSON-export als back-up.</li>
+          <li>Cardmarket dagbestanden (gratis, geen account): prijzen en catalogus.</li>
+          <li>TCGdex (gratis, open): kaartnummers, setcodes en afbeeldingen, gekoppeld op Cardmarket-productnummer.</li>
+          <li>JustTCG (gratis tier, 1.000 calls per maand, max 25 per dag gebruikt): prijzen per conditie uit de VS-markt, omgerekend met de ECB-koers.</li>
+          <li>CardTrader (gratis token): live listings met conditie en taal.</li>
+          <li>PriceCharting (alleen als link): prijzen per PSA-grade.</li>
         </ul>
         <dl class="facts" id="facts"></dl>
+        <p class="msg">Filters, token en instellingen staan alleen in deze browser. Er worden geen lijsten opgeslagen.</p>
       </div>
     </section>
   </main>
