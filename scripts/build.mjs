@@ -18,6 +18,8 @@ import {
   joinProducts, buildDeals, buildIndex, buildShards, buildExpansions, updateHistory, shardHistory, mergeHistoryShards,
   buildReprintIndex, buildReleases, DEALS_COLUMNS, INDEX_COLUMNS, HISTORY_DAYS, HISTORY_SHARDS,
 } from './lib/deals.mjs';
+import { classifySetLanguage } from './lib/sets.mjs';
+import { isAsianSetName } from '../site/lib/links.js';
 
 const GAME_ID = process.env.GAME_ID || '6';
 const GAME_SLUGS = { 1: 'Magic', 3: 'YuGiOh', 6: 'Pokemon', 15: 'FleshAndBlood', 16: 'DigimonCardGame', 17: 'OnePiece', 18: 'Lorcana' };
@@ -118,12 +120,11 @@ async function main() {
   const releases = buildReleases(productsDoc.products, nonsinglesDoc.products || []);
   const index = buildIndex(joined);
   const shards = buildShards(joined, SHARD_COUNT);
-  const expansions = buildExpansions(joined, known);
 
   // Bestanden van optionele stappen (JustTCG, CardTrader) van de vorige versie meenemen; de stappen zelf
   // overschrijven ze als ze draaien. Zonder dit verdwijnen ze bij een build waarin de stap wordt overgeslagen.
   const carry = [];
-  for (const file of ['justtcg.json', 'cardtrader/map.json', 'cmurl.json', 'cmurl-miss.json', 'tcgdex.json', 'tcgdex-nocm.json', 'tcgdex-sets.json', 'tcgcsv.json', 'tcgcsv-products.json', 'codes.json', 'play.json']) {
+  for (const file of ['justtcg.json', 'cardtrader/map.json', 'cmurl.json', 'cmurl-miss.json', 'tcgdex.json', 'tcgdex-nocm.json', 'tcgdex-sets.json', 'tcgcsv.json', 'tcgcsv-products.json', 'codes.json', 'play.json', 'rarity.json', 'ctfloor.json']) {
     const prev = await liveJson(file);
     if (prev) carry.push([file, prev]);
   }
@@ -140,6 +141,13 @@ async function main() {
     live[1] = merged;
   }
   for (const [file, data] of carry) await writeJson(path.join(OUT_DIR, file), data);
+  // Taalklasse per set: Engelse setlijst (TCGdex-seed of live) + TCGdex-koppelingen (alleen Engelse kaarten).
+  const tcgdexMap = carry.find(([f]) => f === 'tcgdex.json')?.[1] || {};
+  const setList = carry.find(([f]) => f === 'tcgdex-sets.json')?.[1] || (existsSync('data/tcgdex-sets.json') ? JSON.parse(await readFile('data/tcgdex-sets.json', 'utf8')) : []);
+  const englishNames = new Set((Array.isArray(setList) ? setList : []).map((x) => x.name));
+  const linkedIds = new Set(Object.keys(tcgdexMap).map(Number));
+  const ctLang = carry.find(([f]) => f === 'cardtrader/map.json')?.[1]?.cmExpansionLang || {};
+  const expansions = buildExpansions(joined, known, { linkedIds, classify: (e) => classifySetLanguage(e, englishNames, { asianTest: isAsianSetName, ctLang: ctLang[e.id] || null }) });
   await writeJson(path.join(OUT_DIR, 'deals.json'), { columns: DEALS_COLUMNS, minTrend: DEALS_MIN_TREND, rows: deals });
   await writeJson(path.join(OUT_DIR, 'index.json'), { columns: INDEX_COLUMNS, rows: index });
   await writeJson(path.join(OUT_DIR, 'expansions.json'), expansions);
@@ -163,6 +171,8 @@ async function main() {
       expansions: expansions.length,
       sealed: (nonsinglesDoc.products || []).length,
       releases: releases.length,
+      setsEnglish: expansions.filter((e) => e.lang === 'en').length,
+      setsForeign: expansions.filter((e) => e.lang === 'x').length,
     },
   };
   // Meta van meegenomen optionele data, afgeleid uit de bestanden zelf (de stap overschrijft dit als hij draait)
@@ -172,6 +182,8 @@ async function main() {
     if (file === 'cmurl.json') meta.cmurl = { linked: Object.keys(data).length, carried: true };
     if (file === 'tcgcsv.json') meta.tcgcsv = { updatedAt: data.updatedAt, cards: Object.keys(data.cards || {}).length, rate: data.rate || null, carried: true };
     if (file === 'play.json') meta.play = { updatedAt: data.updatedAt, tournaments: data.tournaments, decks: data.decks, cards: Object.keys(data.cards || {}).length, carried: true };
+    if (file === 'rarity.json') meta.rarity = { updatedAt: data.updatedAt, cards: Object.keys(data.cards || {}).length, sources: data.sources || null, carried: true };
+    if (file === 'ctfloor.json') meta.ctfloor = { updatedAt: data.updatedAt, cards: Object.keys(data.cards || {}).length, sets: Object.keys(data.sets || {}).length, carried: true };
   }
   await writeJson(path.join(OUT_DIR, 'meta.json'), meta);
   console.log(JSON.stringify(meta.counts));

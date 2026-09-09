@@ -77,6 +77,16 @@ jobs:
         run: node scripts/cardtrader-sync.mjs
         env:
           CARDTRADER_TOKEN: ${{ secrets.CARDTRADER_TOKEN }}
+      - name: Rarity-laag (TCGdex, TCGCSV, CardTrader, nummer-proxy; geen netwerk)
+        if: steps.build.outputs.changed == 'true'
+        run: node scripts/rarity-sync.mjs
+      - name: CardTrader Engels-Good+-ondergrens (optioneel, alleen met secret; max 60 sets per run)
+        if: steps.build.outputs.changed == 'true'
+        run: node scripts/cardtrader-floor.mjs
+        env:
+          SITE_URL: https://nubeslunae.github.io/cardmarket-dealfinder
+          CARDTRADER_TOKEN: ${{ secrets.CARDTRADER_TOKEN }}
+          CT_FLOOR_MAX_SETS: '60'
       - name: Pages op Actions-deploy zetten (neemt tijdelijke gh-pages-branch over)
         if: steps.build.outputs.changed == 'true'
         uses: actions/configure-pages@v5

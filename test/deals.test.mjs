@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import {
   variantSuffix, normalizeGuide, parseDate, joinProducts, discount,
   buildDeals, buildIndex, buildShards, buildExpansions, shardOf, hasAnyPrice, updateHistory, priorMin,
-  yesterdayLow, daysAtSameLow, shardHistory, mergeHistoryShards, saleChangeDays, buildReprintIndex, buildReleases, commonPrefix,
+  yesterdayLow, daysAtSameLow, shardHistory, mergeHistoryShards, saleChangeDays, buildReprintIndex, buildReleases, commonPrefix, medianLow, DEALS_COLUMNS,
 } from '../scripts/lib/deals.mjs';
 
 test('buildReprintIndex en herdrukkolommen', () => {
@@ -18,8 +18,9 @@ test('buildReprintIndex en herdrukkolommen', () => {
   assert.equal(idx.get(500).exps.size, 2);
   assert.equal(idx.get(500).latest, '2024-06-01');
   const rows = buildDeals(joined, { minTrend: 1, reprints: idx });
-  assert.deepEqual(rows.find((r) => r[0] === 1).slice(23), [2, '2024-06-01']);
-  assert.deepEqual(rows.find((r) => r[0] === 3).slice(23), [1, '2024-06-01']);
+  assert.deepEqual(rows.find((r) => r[0] === 1).slice(23, 25), [2, '2024-06-01']);
+  assert.deepEqual(rows.find((r) => r[0] === 1).slice(25), [null, null]); // medLow zonder historie
+  assert.deepEqual(rows.find((r) => r[0] === 3).slice(23, 25), [1, '2024-06-01']);
 });
 
 test('buildReleases: eerste datum per set, schatting, venster', () => {
@@ -94,8 +95,8 @@ test('discount', () => {
 test('buildDeals filtert op hoogste trend van normaal of holo', () => {
   const rows = buildDeals(joinProducts(products, guides), { minTrend: 10 });
   assert.deepEqual(rows.map((r) => r[0]), [10, 11]); // 10 via holo-trend 12, 11 via trend 100
-  assert.equal(rows[0].length, 25);
-  assert.deepEqual(rows[1], [11, 'Charizard ex', 100, 40, 100, 60, 95, 90, null, null, null, null, null, null, null, null, null, 0, 0, 0, 0, 0, 0, 1, null]);
+  assert.equal(rows[0].length, 27);
+  assert.deepEqual(rows[1], [11, 'Charizard ex', 100, 40, 100, 60, 95, 90, null, null, null, null, null, null, null, null, null, 0, 0, 0, 0, 0, 0, 1, null, null, null]);
 });
 
 test('buildIndex bevat alle producten gesorteerd op id', () => {
@@ -114,8 +115,8 @@ test('buildShards plaatst op id % count en slaat prijsloze producten over', () =
 
 test('buildExpansions telt, neemt vroegste datum en bekende naam', () => {
   const exps = buildExpansions(joinProducts(products, guides), { 100: 'Test Set' });
-  assert.deepEqual(exps[0], { id: 100, name: 'Test Set', count: 2, first: '2024-02-15' });
-  assert.deepEqual(exps[1], { id: 101, name: null, count: 2, first: null });
+  assert.deepEqual(exps[0], { id: 100, name: 'Test Set', count: 2, first: '2024-02-15', linked: 0 });
+  assert.deepEqual(exps[1], { id: 101, name: null, count: 2, first: null, linked: 0 });
 });
 
 test('updateHistory voegt een dag toe (laagste + 7d-gem.), lijnt uit, knipt af en negeert dubbele datum', () => {
@@ -164,7 +165,7 @@ test('updateHistory voegt een dag toe (laagste + 7d-gem.), lijnt uit, knipt af e
   // buildDeals neemt historiekolommen mee
   const rows = buildDeals(joined2, { minTrend: 1, history: h2 });
   const r10 = rows.find((r) => r[0] === 10);
-  assert.equal(r10.length, 25);
+  assert.equal(r10.length, 27);
   assert.deepEqual(r10.slice(19, 23), [0, 0, 1, 1]); // avg1 bleef 4: geen verkoop gemeten over 1 dagpaar
   assert.equal(r10[13], 2); // prevLow: gisteren was de laagste 2, vandaag 1
   assert.equal(r10[14], 3); // hPrevLow
@@ -178,4 +179,13 @@ test('updateHistory voegt een dag toe (laagste + 7d-gem.), lijnt uit, knipt af e
   assert.equal(shards.length, 4);
   assert.deepEqual(shards[10 % 4].n[10], h2.n[10]);
   assert.deepEqual(mergeHistoryShards([shards[0], null, shards[2], shards[3], shards[1]]), h2);
+});
+
+test('medianLow: mediaan van de laagste over de historie, minimaal 5 dagen', () => {
+  assert.equal(medianLow([1, 2, 3, 4, 100]), 3);
+  assert.equal(medianLow({ l: [4, null, 2, 3, 1, 5] }), 3);
+  assert.equal(medianLow([1, 2, 3, 4]), null);
+  assert.equal(medianLow({ l: [1.25, 1.25, 1.25, 1.25, 1.25] }), 1.25);
+  assert.equal(DEALS_COLUMNS.length, 27);
+  assert.equal(DEALS_COLUMNS[25], 'medLow');
 });

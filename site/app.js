@@ -3,6 +3,7 @@
    en de conditie-onafhankelijke test "laagste onder Poor-waarde" = zeker koopje. */
 import { DEFAULT_SETTINGS, normalizeListing, passesFilters, landedCost } from './lib/landed.js';
 import { splitName, cardmarketCardUrl, cardmarketSetUrl, cardmarketSearchUrl, cardtraderUrl, isAsianSetName, suggestedBuyPrice, pricechartingUrl } from './lib/links.js';
+import { RARITY_CLASSES, rarityClass, cardmarketRarityUrl, suspectReasons, peerOutlier, interleaveByClass } from './lib/signals.js';
 
 const LS = { filters: 'cmdf.filters', costs: 'cmdf.costs', token: 'cmdf.ct.token', ctSettings: 'cmdf.ct.settings', liveFilters: 'cmdf.livefilters' };
 const PAGE_SIZE = 150;
@@ -10,14 +11,14 @@ const CT_BASE = 'https://api.cardtrader.com/api/v2';
 const CT_DELAY_MS = 250;
 const TCGDEX_IMG = 'https://assets.tcgdex.net/';
 const OFFSET = { n: 3, h: 8 };
-const COL = { prevLow: { n: 13, h: 14 }, yLow: { n: 15, h: 16 }, daysAtLow: { n: 17, h: 18 }, saleDays: { n: 19, h: 20 }, saleDaysN: { n: 21, h: 22 }, reprints: 23, lastReprint: 24 };
+const COL = { prevLow: { n: 13, h: 14 }, yLow: { n: 15, h: 16 }, daysAtLow: { n: 17, h: 18 }, saleDays: { n: 19, h: 20 }, saleDaysN: { n: 21, h: 22 }, reprints: 23, lastReprint: 24, medLow: { n: 25, h: 26 } };
 const ROTATING_MARKS = new Set(['H']); // roteert bij de volgende rotatie (rond april 2027); G en ouder zijn al uit Standard
 const FIXED = { NM: 1, EX: 0.9, GD: 0.75, PL: 0.6, PO: 0.4 };
 const COND_LABEL = { NM: 'Near Mint', EX: 'Excellent', GD: 'Good', PL: 'Played', PO: 'Poor' };
 
 const state = {
   meta: null, deals: [], expansions: new Map(), index: null, indexById: null, shards: new Map(), hist: new Map(), tcgdex: null, justtcg: null,
-  tcgcsv: null, play: null, releases: null, vshist: new Map(), metaFilters: loadJson('cmdf.metafilters', {}),
+  tcgcsv: null, play: null, releases: null, vshist: new Map(), metaFilters: loadJson('cmdf.metafilters', {}), rarity: null, ctfloor: null,
   filters: loadJson(LS.filters, {}), costs: loadJson(LS.costs, {}), liveFilters: loadJson(LS.liveFilters, {}), visible: PAGE_SIZE, liveVisible: PAGE_SIZE, results: [],
   ct: { token: loadRaw(LS.token), settings: { ...DEFAULT_SETTINGS, ...loadJson(LS.ctSettings, {}) }, map: null, byBlueprint: null, expansions: [], abort: false, busy: false },
   live: [],
@@ -44,7 +45,11 @@ function expLabel(expId) {
   return e.name || (e.first ? `Set ${e.id} · sinds ${e.first.slice(0, 7)}` : `Set ${e.id}`);
 }
 const gameSlug = () => state.meta?.game?.slug || 'Pokemon';
-function tcgdexOf(id) { const e = state.tcgdex?.[id]; return e ? { tcgId: e[0], number: e[1], image: e[2] ? `${TCGDEX_IMG}${e[2]}` : null, mark: e[3] || null } : null; }
+function tcgdexOf(id) { const e = state.tcgdex?.[id]; return e ? { tcgId: e[0], number: e[1], image: e[2] ? `${TCGDEX_IMG}${e[2]}` : null, mark: e[3] || null, rarity: e[4] || null } : null; }
+/** Rarity-klasse van een kaart (rarity.json, anders TCGdex-label ter plekke), of null. */
+function rarityOf(id) { const c = state.rarity?.cards?.[id]; if (c) return c; const t = state.tcgdex?.[id]; return t?.[4] ? rarityClass(t[4]) : null; }
+/** CardTrader Engels-Good+-ondergrens [prijs, aantal, zero] voor een kaart/variant, of null. */
+function ctFloorOf(id, variant) { const c = state.ctfloor?.cards?.[id]; return c?.[variant === 'h' ? 'h' : 'n'] || null; }
 /** VS-marktprijs (TCGplayer via TCGCSV) in EUR voor een kaart/variant, of null. */
 function usPrice(id, variant) { const c = state.tcgcsv?.cards?.[id]; const rate = state.tcgcsv?.rate?.usd_eur; const v = c?.[variant === 'h' ? 'h' : 'n']; return v != null && rate ? v * rate : null; }
 async function ensureVsHist(id) {
@@ -154,8 +159,11 @@ function evaluate(row, variant) {
   const saleDays = row[COL.saleDays[variant]] ?? 0; const saleDaysN = row[COL.saleDaysN[variant]] ?? 0;
   const liq = liquidity(avg1, avg7, avg30, saleDays, saleDaysN);
   const reprints = row[COL.reprints] ?? 1; const lastReprint = row[COL.lastReprint] ?? null;
+  const medLow = row[COL.medLow[variant]] ?? null; const ctf = ctFloorOf(row[0], variant); const ctFloor = ctf ? ctf[0] : null;
+  const sig = suspectReasons({ low, prevLow, daysAtLow, medLow, goodValue: refs?.GD, ctFloor });
   return {
     id: row[0], name: row[1], exp: row[2], variant, low, trend, avg1, avg7, avg30, prevLow, yLow, daysAtLow, refs, fresh, saleDays, saleDaysN, liq, reprints, lastReprint,
+    medLow, ctFloor, ctCount: ctf ? ctf[1] : 0, ctZero: ctf ? Boolean(ctf[2]) : false, suspect: sig.suspect, suspectReasons: sig.reasons, notes: sig.notes, rarity: rarityOf(row[0]),
     sure: refs != null && low != null && low <= refs.PO, good: refs != null && low != null && low <= refs.GD, under: refs != null && low != null && low < refs.NM,
     marginMin: refs ? marginOf(refs.PO, low) : null, marginGood: refs ? marginOf(refs.GD, low) : null, marginNM: refs ? marginOf(refs.NM, low) : null,
     score: refs && low != null ? 1 - low / refs.PO : null, plausible: reasons.length === 0, reasons,
@@ -184,9 +192,11 @@ function freshHtml(d) {
 }
 const marginHtml = (m) => (m == null ? '–' : `<span class="margin ${m > 0 ? 'pos' : 'neg'}">${fmtEur(m)}</span>`);
 const dealBadge = (d) => (d.sure ? '<span class="badge good">zeker</span>' : d.good ? '<span class="badge accent">als Good+</span>' : '');
+const rarityBadge = (d) => (d.rarity ? `<span class="badge rar" title="${escapeHtml(RARITY_CLASSES[d.rarity] || d.rarity)}">${d.rarity}</span>` : '');
+const suspectBadge = (d) => (d.suspect ? `<span class="badge warn" title="${escapeHtml(d.suspectReasons.map((r) => r.text).join('; '))}">taal?</span>` : d.notes?.some((n) => n.code === 'drop') ? `<span class="badge good" title="${escapeHtml(d.notes.find((n) => n.code === 'drop').text)}">kans</span>` : '');
 
 /* ---------- deals ---------- */
-const DEAL_DEFAULTS = { mode: 'sure', minRef: 10, maxLow: '', variant: 'n', expq: '', exp: '', sort: 'marginMin', q: '', hideStale: true, plausibleOnly: true, hideSlow: true, onlyRatio: false };
+const DEAL_DEFAULTS = { mode: 'sure', minRef: 10, maxLow: '', variant: 'n', expq: '', exp: '', sort: 'marginMin', q: '', hideStale: true, plausibleOnly: true, hideSlow: true, onlyRatio: false, rarity: '', hideSuspect: true };
 function initDeals() {
   const form = $('#filters');
   bindForm(form, state.filters, DEAL_DEFAULTS, () => { save(LS.filters, state.filters); state.visible = PAGE_SIZE; fillExpansionSelect(); renderDeals(); });
@@ -204,14 +214,14 @@ function fillExpansionSelect() {
   sel.replaceChildren(new Option(q ? `alle ${list.length} gevonden sets` : 'alle sets', ''), ...list.map((e) => new Option(`${expLabel(e.id)} (${e.count})`, e.id)));
   if (current && [...sel.options].some((o) => o.value === current)) sel.value = current; else if (current) { state.filters.exp = ''; sel.value = ''; }
 }
-const asianSetIds = () => new Set([...state.expansions.values()].filter((e) => isAsianSetName(e.name)).map((e) => e.id));
+const asianSetIds = () => new Set([...state.expansions.values()].filter((e) => e.lang === 'x' || (e.lang == null && isAsianSetName(e.name))).map((e) => e.id));
 const historyDays = () => state.meta?.history?.dates?.length || 0;
 function computeDeals() {
   const f = state.filters;
   const variants = f.variant === 'both' ? ['n', 'h'] : [f.variant];
   const minRef = Number(f.minRef) || 0; const maxLow = num(f.maxLow); const exp = f.exp ? Number(f.exp) : null; const q = (f.q || '').toLowerCase();
   const asian = asianSetIds();
-  const out = []; let hiddenStale = 0; let hiddenImplausible = 0; let hiddenSlow = 0;
+  const out = []; let hiddenStale = 0; let hiddenImplausible = 0; let hiddenSlow = 0; let hiddenSuspect = 0;
   for (const row of state.deals) {
     if (exp != null && row[2] !== exp) continue;
     if (f.plausibleOnly && asian.has(row[2])) continue;
@@ -227,6 +237,8 @@ function computeDeals() {
       if (f.plausibleOnly && !d.plausible) { hiddenImplausible += 1; continue; }
       if (f.hideStale && d.fresh === 'same') { hiddenStale += 1; continue; }
       if (f.hideSlow && d.liq.cls === 'slow') { hiddenSlow += 1; continue; }
+      if (f.rarity && d.rarity !== f.rarity) continue;
+      if (f.hideSuspect && d.suspect) { hiddenSuspect += 1; continue; }
       out.push(d);
     }
   }
@@ -235,8 +247,9 @@ function computeDeals() {
     score: (a, b) => (b.score ?? -1e9) - (a.score ?? -1e9), low: (a, b) => a.low - b.low, ref: (a, b) => (b.avg7 ?? 0) - (a.avg7 ?? 0),
   };
   out.sort(sorters[f.sort] || sorters.marginMin);
-  out.hiddenStale = hiddenStale; out.hiddenImplausible = hiddenImplausible; out.hiddenSlow = hiddenSlow;
-  return out;
+  const result = f.sort === 'rarity' ? interleaveByClass(out, (d) => d.rarity) : out;
+  result.hiddenStale = hiddenStale; result.hiddenImplausible = hiddenImplausible; result.hiddenSlow = hiddenSlow; result.hiddenSuspect = hiddenSuspect;
+  return result;
 }
 function renderDeals() {
   const tbody = $('#deals-table tbody');
@@ -247,17 +260,18 @@ function renderDeals() {
   const withRatio = results.filter((d) => d.refs.source === 'ratio').length;
   const days = historyDays();
   $('#deals-summary').textContent = results.length
-    ? `${results.length.toLocaleString('nl-NL')} ${modeText} · waarde ≥ ${fmtEur(Number(f.minRef) || 0)} · ${withRatio} met VS-conditiedata${results.hiddenStale ? ` · ${results.hiddenStale} verborgen die gisteren al zo laag stonden` : ''}${results.hiddenSlow ? ` · ${results.hiddenSlow} traag verkopende verborgen` : ''}${results.hiddenImplausible ? ` · ${results.hiddenImplausible} onwaarschijnlijke verborgen` : ''} · prijzen van ${fmtDate(state.meta?.sources?.guide?.createdAt)}${days < 2 ? ' · versheid werkt vanaf 2 dagen historie' : ''}. Tik op een kaart voor details.`
+    ? `${results.length.toLocaleString('nl-NL')} ${modeText} · waarde ≥ ${fmtEur(Number(f.minRef) || 0)} · ${withRatio} met VS-conditiedata${results.hiddenStale ? ` · ${results.hiddenStale} verborgen die gisteren al zo laag stonden` : ''}${results.hiddenSlow ? ` · ${results.hiddenSlow} traag verkopende verborgen` : ''}${results.hiddenImplausible ? ` · ${results.hiddenImplausible} onwaarschijnlijke verborgen` : ''}${results.hiddenSuspect ? ` · ${results.hiddenSuspect} verborgen die waarschijnlijk niet Engels/Good+ zijn` : ''} · prijzen van ${fmtDate(state.meta?.sources?.guide?.createdAt)}${days < 2 ? ' · versheid werkt vanaf 2 dagen historie' : ''}. Tik op een kaart voor details.`
     : `Geen treffers. Verlaag "Waarde vanaf", kies "Koopjes als Good of beter" of zet een filter uit.${results.hiddenStale ? ` (${results.hiddenStale} verborgen die gisteren al zo laag stonden.)` : ''}`;
   $$('#deals-table th[data-sort]').forEach((th) => th.classList.toggle('sorted', th.dataset.sort === f.sort));
   $('#filters-desc').textContent = `${modeText.split(' (')[0]} · waarde ≥ €${f.minRef}${f.exp ? ` · ${expLabel(Number(f.exp))}` : ''}`;
   tbody.replaceChildren(...shown.map((d) => {
     const tr = document.createElement('tr');
     tr.innerHTML = `
-      <td class="name">${nameHtml(d.name, d.id, d.variant)}${d.variant === 'h' ? '<span class="badge accent">holo</span>' : ''}${dealBadge(d)}${d.refs.source === 'ratio' ? '<span class="badge" title="Conditieverhoudingen uit VS-marktdata">VS</span>' : ''}${d.fresh === 'new' ? '<span class="badge good">nieuw laag</span>' : ''}
+      <td class="name">${nameHtml(d.name, d.id, d.variant)}${d.variant === 'h' ? '<span class="badge accent">holo</span>' : ''}${rarityBadge(d)}${dealBadge(d)}${suspectBadge(d)}${d.refs.source === 'ratio' ? '<span class="badge" title="Conditieverhoudingen uit VS-marktdata">VS</span>' : ''}${d.fresh === 'new' ? '<span class="badge good">nieuw laag</span>' : ''}
         <span class="set-inline">${escapeHtml(expLabel(d.exp))}</span>
-        <span class="m-stats"><b>${fmtEur(d.low)}</b> · NM ${fmtEur(d.refs.NM)} · Poor ${fmtEur(d.refs.PO)} · marge min. ${marginHtml(d.marginMin)} · ${liqHtml(d)} ${cardLink(d.name, d.exp, d.id)}</span></td>
+        <span class="m-stats"><b>${fmtEur(d.low)}</b>${d.ctFloor != null ? ` · CT EN ${fmtEur(d.ctFloor)}` : ''} · NM ${fmtEur(d.refs.NM)} · Good ${fmtEur(d.refs.GD)} · marge min. ${marginHtml(d.marginMin)} · ${liqHtml(d)} ${cardLink(d.name, d.exp, d.id)}</span></td>
       <td class="num opt">${fmtEur(d.low)}</td>
+      <td class="num opt" title="${d.ctFloor != null ? `${d.ctCount} Engelse Good+-aanbiedingen op CardTrader${d.ctZero ? ', goedkoopste via CardTrader Zero' : ''}` : 'geen CardTrader-meting voor deze kaart'}">${d.ctFloor != null ? fmtEur(d.ctFloor) : '–'}</td>
       <td class="opt">${freshHtml(d)}</td>
       <td class="opt">${liqHtml(d)}</td>
       <td class="num opt">${fmtEur(d.refs.NM)}</td>
@@ -383,7 +397,12 @@ async function openDetail(id, variant = 'n') {
   const us = usPrice(id, variant); const spread = us != null && p?.avg7 ? p.avg7 / us - 1 : null;
   const played = state.play?.cards?.[id];
   const vs = state.vshist.get(id % 64)?.cards?.[id]; const vsWeeks = state.vshist.get(id % 64)?.weeks;
+  const rar = rarityOf(id); const rarLabel = rar ? RARITY_CLASSES[rar] || rar : null;
+  const ctf = ctFloorOf(id, variant);
+  const peers = rar && dealRow ? state.deals.filter((r) => r[2] === exp && r[0] !== id && rarityOf(r[0]) === rar).map((r) => { const o = OFFSET[variant]; return { low: r[o], value: r[o + 3] }; }).filter((x) => x.low != null) : [];
+  const peer = rar && p?.low != null ? peerOutlier({ low: p.low, value: p.avg7 }, peers) : null;
   const signals = [
+    ctf ? `<div><div class="k">CardTrader EN Good+</div><div class="v">${fmtEur(ctf[0])}</div></div>` : '',
     us != null ? `<div><div class="k">VS-markt (TCGplayer)</div><div class="v">${fmtEur(us)}</div></div>` : '',
     spread != null ? `<div><div class="k">EU t.o.v. VS</div><div class="v">${fmtSigned(spread)}</div></div>` : '',
     played ? `<div><div class="k">Gespeeld (30 d)</div><div class="v">${played.decks} decks</div></div>` : '',
@@ -397,19 +416,32 @@ async function openDetail(id, variant = 'n') {
       ${t?.image ? `<img src="${t.image}/high.webp" alt="" loading="lazy">` : ''}
       <div>
         <h2>${nameHtml(name)}</h2>
-        <div class="exp">${escapeHtml(expLabel(exp))}${t?.number ? ` · #${escapeHtml(t.number)}` : ''}${variant === 'h' ? ' · holo/reverse' : ''}</div>
+        <div class="exp">${escapeHtml(expLabel(exp))}${t?.number ? ` · #${escapeHtml(t.number)}` : ''}${rarLabel ? ` · ${escapeHtml(t?.rarity || rarLabel)}` : ''}${variant === 'h' ? ' · holo/reverse' : ''}</div>
         <p>${d ? `${dealBadge(d)} ${freshHtml(d)} ${liqHtml(d)} ${reprintHtml(d)}` : ''} ${rotationHtml(t?.mark)} ${d && !d.plausible ? `<span class="badge warn" title="${escapeHtml(d.reasons.join('; '))}">onwaarschijnlijk</span>` : ''}</p>
         <div class="metrics">${[['Laagste', p?.low], ['Trend', p?.trend], ['Gem. 1d', p?.avg1], ['Gem. 7d', p?.avg7], ['Gem. 30d', p?.avg30], ['Vorige 7d laagste', d?.prevLow]].map(([k, v]) => `<div><div class="k">${k}</div><div class="v">${fmtEur(v)}</div></div>`).join('')}${signals}</div>
         ${spread != null ? `<p class="msg">EU t.o.v. VS: ${spread < -0.2 ? 'Cardmarket ligt duidelijk onder de VS-markt (onderwaardering binnen de EU?)' : spread > 0.2 ? 'Cardmarket ligt boven de VS-markt' : 'EU en VS in lijn'}. VS-inkoop is sinds de €3-douaneheffing (juli 2026) niet rendabel; dit is alleen een waarderingssignaal.</p>` : ''}
-        <div class="detail-actions">${linksHtml(name, exp, id)}${ct ? ` <a href="${cardtraderUrl(ct[0])}" target="_blank" rel="noopener">CardTrader ↗</a>` : ''} <button type="button" class="btn" id="detail-wants">Kopieer voor wants list</button></div>
+        <div class="detail-actions">${linksHtml(name, exp, id)}${ct ? ` <a href="${cardtraderUrl(ct[0])}" target="_blank" rel="noopener">CardTrader ↗</a>` : ''}${rar && exp != null ? ` <a href="${cardmarketRarityUrl(gameSlug(), exp, rar)}" target="_blank" rel="noopener" title="Alle kaarten van deze rarity in deze set op Cardmarket, goedkoopste eerst">Set per rarity ↗</a>` : ''} <button type="button" class="btn" id="detail-wants">Kopieer voor wants list</button></div>
         <p class="msg" id="detail-msg"></p>
       </div>
     </div>
+    ${langCheckHtml(d, p, ctf, peer, peers.length)}
     ${condTable}
     <h3>Verloop (Cardmarket)</h3>${chartSvg(histFor(id, variant))}
     ${vs && vsWeeks && vs.some((v) => v != null) ? `<h3>VS-markt per week (TCGplayer, USD)</h3>${chartSvg({ dates: vsWeeks, l: vs, a: [] })}` : ''}`;
   $('#detail-close').addEventListener('click', () => dlg.close());
   $('#detail-wants').addEventListener('click', async () => { try { await navigator.clipboard.writeText(wants); $('#detail-msg').textContent = `Gekopieerd: ${wants}`; } catch { $('#detail-msg').textContent = wants; } });
+}
+/** Detailblok "Taal/conditie-check": signalen, CardTrader-ondergrens, 60-dagen-mediaan en uitschieter binnen set + rarity. */
+function langCheckHtml(d, p, ctf, peer, nPeers) {
+  const items = [];
+  if (d) { for (const r of d.suspectReasons) items.push(`<li class="warn">⚠ ${escapeHtml(r.text)}</li>`); for (const n of d.notes) items.push(`<li>${n.code === 'drop' ? '★' : '✓'} ${escapeHtml(n.text)}</li>`); }
+  if (ctf) items.push(`<li>CardTrader, Engels en Good+ of beter: goedkoopste ${fmtEur(ctf[0])} (${ctf[1]} aanbieding${ctf[1] === 1 ? '' : 'en'}${ctf[2] ? ', goedkoopste via CardTrader Zero' : ''}); Cardmarket-laagste is ${p?.low != null ? fmtPct(p.low / ctf[0]) : '–'} daarvan.</li>`);
+  else items.push('<li>Geen CardTrader-meting voor deze kaart (set nog niet opgehaald of geen Engelse Good+-aanbieding).</li>');
+  if (d?.medLow != null && p?.low != null) items.push(`<li>60-dagen-mediaan van de laagste: ${fmtEur(d.medLow)}; vandaag ${fmtPct(p.low / d.medLow)} daarvan${d.daysAtLow ? `, al ${d.daysAtLow} dag(en) zo` : ''}.</li>`);
+  if (peer) items.push(`<li>Soortgenoten (zelfde set en rarity, ${peer.n}): mediaan laagste ${fmtEur(peer.medLow)}${peer.medValue != null ? `, mediaan NM-waarde ${fmtEur(peer.medValue)}` : ''}; deze kaart ligt op ${fmtPct(peer.lowRatio)} van hun laagste${peer.lowRatio < 0.5 ? ' (uitschieter: foutlisting, anderstalig, beschadigd of echt koopje)' : ''}.</li>`);
+  else if (nPeers != null && nPeers < 5 && d?.rarity) items.push('<li>Te weinig soortgenoten in deze set en rarity voor een vergelijking.</li>');
+  if (!items.length) return '';
+  return `<h3>Taal/conditie-check</h3><ul class="check-list">${items.join('')}</ul><p class="msg">De Cardmarket-laagste geldt voor elke taal en conditie, per stuk (ook playsets). Open de kaart met de link hierboven: die filtert op Engels en Good+.</p>`;
 }
 function initDetail() {
   document.addEventListener('click', (ev) => { const a = ev.target.closest('a.namelink[data-open]'); if (!a) return; ev.preventDefault(); openDetail(Number(a.dataset.open), a.dataset.variant || 'n'); });
@@ -568,6 +600,9 @@ function renderInfo() {
     ['VS-weekhistorie (TCGCSV-archief)', m.vshist ? `${m.vshist.weeksLoaded} van ${m.vshist.weeks} weken, ${(m.vshist.cards || 0).toLocaleString('nl-NL')} kaarten` : 'nog niet (workflow "VS-prijshistorie" starten)'],
     ['Sets in kalender / sealed producten', `${m.counts?.releases ?? '?'} / ${(m.counts?.sealed || 0).toLocaleString('nl-NL')}`],
     ['CardTrader-koppeling', m.cardtrader ? `${(m.cardtrader.linked || 0).toLocaleString('nl-NL')} kaarten` : 'niet actief (secret CARDTRADER_TOKEN ontbreekt)'],
+    ['CardTrader Engels-Good+-ondergrens', m.ctfloor ? `${(m.ctfloor.cards || 0).toLocaleString('nl-NL')} kaarten uit ${m.ctfloor.sets} sets, ${fmtDate(m.ctfloor.updatedAt)}` : 'nog niet'],
+    ['Rarity', m.rarity ? `${(m.rarity.cards || 0).toLocaleString('nl-NL')} producten (TCGdex ${m.rarity.sources?.tcgdex ?? 0}, TCGCSV ${m.rarity.sources?.tcgcsv ?? 0}, CardTrader ${m.rarity.sources?.cardtrader ?? 0}, promo ${m.rarity.sources?.promo ?? 0}, nummer ${m.rarity.sources?.number ?? 0})` : 'nog niet'],
+    ['Sets: Engels / waarschijnlijk niet Engels', `${m.counts?.setsEnglish ?? '?'} / ${m.counts?.setsForeign ?? '?'}`],
   ];
   $('#facts').replaceChildren(...facts.flatMap(([k, v]) => { const dt = document.createElement('dt'); dt.textContent = k; const dd = document.createElement('dd'); dd.textContent = v; return [dt, dd]; }));
 }
@@ -577,8 +612,8 @@ async function main() {
   initTabs(); initDeals(); initDetail();
   $('#refresh-now').addEventListener('click', () => location.reload());
   try {
-    const [meta, deals, expansions, justtcg, cmurl, tcgcsv, play] = await Promise.all([fetchJson('data/meta.json'), fetchJson('data/deals.json'), fetchJson('data/expansions.json'), fetchJson('data/justtcg.json').catch(() => null), fetchJson('data/cmurl.json').catch(() => null), fetchJson('data/tcgcsv.json').catch(() => null), fetchJson('data/play.json').catch(() => null)]);
-    state.meta = meta; state.deals = deals.rows; state.expansions = new Map(expansions.map((e) => [e.id, e])); state.justtcg = justtcg; state.cmurl = cmurl; state.tcgcsv = tcgcsv; state.play = play;
+    const [meta, deals, expansions, justtcg, cmurl, tcgcsv, play, rarity, ctfloor] = await Promise.all([fetchJson('data/meta.json'), fetchJson('data/deals.json'), fetchJson('data/expansions.json'), fetchJson('data/justtcg.json').catch(() => null), fetchJson('data/cmurl.json').catch(() => null), fetchJson('data/tcgcsv.json').catch(() => null), fetchJson('data/play.json').catch(() => null), fetchJson('data/rarity.json').catch(() => null), fetchJson('data/ctfloor.json').catch(() => null)]);
+    state.meta = meta; state.deals = deals.rows; state.expansions = new Map(expansions.map((e) => [e.id, e])); state.justtcg = justtcg; state.cmurl = cmurl; state.tcgcsv = tcgcsv; state.play = play; state.rarity = rarity; state.ctfloor = ctfloor;
   } catch (e) { $('#meta-line').textContent = 'Data kon niet geladen worden. Is de eerste build al gedraaid?'; $('#deals-summary').textContent = String(e.message || e); return; }
   fillExpansionSelect(); renderInfo(); renderDeals(); renderStatus();
   setInterval(renderStatus, 60e3); setInterval(watchForNewData, 10 * 60e3);

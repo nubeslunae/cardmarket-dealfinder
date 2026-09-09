@@ -37,8 +37,8 @@ async function main() {
   const indexFile = path.join(OUT_DIR, 'index.json');
   if (!existsSync(indexFile)) throw new Error(`${indexFile} ontbreekt; draai eerst scripts/build.mjs`);
 
-  const games = await api('/games');
-  const game = pickGame(games, GAME_PATTERN);
+  const gamesDoc = await api('/games');
+  const game = pickGame(Array.isArray(gamesDoc) ? gamesDoc : gamesDoc.array || [], GAME_PATTERN); // /games levert { array: [...] }
   if (!game) throw new Error(`geen spel gevonden voor ${GAME_PATTERN}`);
   await sleep(DELAY);
   const ctExpansions = (await api('/expansions')).filter((e) => e.game_id === game.id).map((e) => ({ id: e.id, code: e.code, name: e.name }));
@@ -49,7 +49,10 @@ async function main() {
     await sleep(DELAY);
     let list;
     try { list = await api(`/blueprints/export?expansion_id=${e.id}`); } catch (err) { console.warn(`set ${e.id} (${e.name}) overgeslagen: ${err.message}`); continue; }
-    for (const b of list) blueprints.push({ id: b.id, expansion_id: b.expansion_id ?? e.id, card_market_ids: b.card_market_ids || [], name: b.name });
+    for (const b of list) {
+      const langProp = (b.editable_properties || []).find((p) => /_language$/.test(p.name || ''));
+      blueprints.push({ id: b.id, expansion_id: b.expansion_id ?? e.id, card_market_ids: b.card_market_ids || [], name: b.name, rarity: b.fixed_properties?.pokemon_rarity || b.fixed_properties?.rarity || null, number: b.fixed_properties?.collector_number || null, lang: typeof langProp?.default_value === 'string' ? langProp.default_value.toLowerCase() : null });
+    }
     if ((i + 1) % 25 === 0) console.log(`  ${i + 1}/${ctExpansions.length} sets, ${blueprints.length} blueprints`);
   }
 
@@ -62,8 +65,9 @@ async function main() {
   await writeFile(path.join(ctDir, 'map.json'), JSON.stringify({
     game: { id: game.id, name: game.display_name || game.name },
     syncedAt: new Date().toISOString(),
-    expansions: ctExpansions,
+    expansions: ctExpansions.map((e) => ({ ...e, lang: map.ctExpansionLang[e.id] || null })),
     byCardmarket: map.byCardmarket,
+    cmExpansionLang: map.cmExpansionLang,
     stats: map.stats,
   }));
 

@@ -48,6 +48,15 @@ export function numbersByProduct(rows) {
   }
   return out;
 }
+/** Productregels van een groep → { productId: rarity-label } (extendedData "Rarity"). */
+export function raritiesByProduct(rows) {
+  const out = {};
+  for (const p of rows) {
+    const r = (p.extendedData || []).find((x) => x.name === 'Rarity')?.value;
+    if (r) out[p.productId] = String(r);
+  }
+  return out;
+}
 
 async function main() {
   const tcgdexFile = path.join(OUT_DIR, 'tcgdex.json');
@@ -60,12 +69,12 @@ async function main() {
 
   // Productcache: alleen groepen zonder cache, of recent gewijzigd
   const cache = (await liveJson('tcgcsv-products.json')) || {};
-  const toFetch = groups.filter((g) => setMap[g.groupId] && (!cache[g.groupId] || (Date.now() - Date.parse(cache[g.groupId].at || 0)) > REFRESH_DAYS * 864e5 || (Date.now() - Date.parse(g.modifiedOn)) < 3 * 864e5));
+  const toFetch = groups.filter((g) => setMap[g.groupId] && (!cache[g.groupId] || !cache[g.groupId].rarity || (Date.now() - Date.parse(cache[g.groupId].at || 0)) > REFRESH_DAYS * 864e5 || (Date.now() - Date.parse(g.modifiedOn)) < 3 * 864e5));
   console.log(`productlijsten: ${toFetch.length} ophalen, ${Object.keys(cache).length} in cache`);
   let done = 0; const fails = [];
   const worker = async (list, fn) => { while (list.length) { const g = list.shift(); try { await fn(g); } catch (e) { fails.push(`${g.groupId}: ${e.message}`); } done += 1; } };
   const q1 = [...toFetch];
-  await Promise.all(Array.from({ length: CONC }, () => worker(q1, async (g) => { const p = await getJson(`${BASE}/${g.groupId}/products`); cache[g.groupId] = { at: new Date().toISOString(), abbr: g.abbreviation, numbers: numbersByProduct(p.results || []) }; })));
+  await Promise.all(Array.from({ length: CONC }, () => worker(q1, async (g) => { const p = await getJson(`${BASE}/${g.groupId}/products`); cache[g.groupId] = { at: new Date().toISOString(), abbr: g.abbreviation, numbers: numbersByProduct(p.results || []), rarity: raritiesByProduct(p.results || []) }; })));
 
   // Prijzen per gekoppelde groep
   const cards = {}; const codes = {}; let linked = 0;
@@ -77,7 +86,8 @@ async function main() {
       const cm = reverse.get(`${tset}-${nr}`); if (!cm) continue;
       if (abbr) codes[`${abbr}${nr.toUpperCase()}`] = cm;
       const p = pr[pid]; if (!p) continue;
-      cards[cm] = { ...p, tp: Number(pid) }; linked += 1;
+      const rar = cache[g.groupId].rarity?.[pid];
+      cards[cm] = { ...p, tp: Number(pid), ...(rar ? { r: rar } : {}) }; linked += 1;
     }
   })));
   let rate = null;

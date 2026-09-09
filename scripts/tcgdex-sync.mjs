@@ -3,9 +3,10 @@
 // die per kaart Cardmarket's idProduct meelevert. Incrementeel: bestaande koppelingen (seed in de repo of
 // vorige versie op de live site) worden niet opnieuw opgehaald; alleen nieuwe TCGdex-kaarten.
 //
-// Uitvoer: site/data/tcgdex.json  { "<cmId>": ["<tcgdexId>", "<localId>", "<imageBase zonder prefix>"] , ... }
+// Uitvoer: site/data/tcgdex.json  { "<cmId>": ["<tcgdexId>", "<localId>", "<imageBase>", "<regulatiemerk>", "<rarity>"] , ... }
 // Env: OUT_DIR (default site/data), SITE_URL (vorige versie), SEED (default data/tcgdex.json),
-//      TCGDEX_CONCURRENCY (default 8), TCGDEX_MAX_NEW (default 30000), TCGDEX_LANG (default en)
+//      TCGDEX_CONCURRENCY (default 8), TCGDEX_MAX_NEW (default 30000), TCGDEX_LANG (default en),
+//      TCGDEX_REFRESH_MAX (default 4000): oude entries zonder rarity-veld per run opnieuw ophalen
 
 import { readFile, writeFile, mkdir } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
@@ -17,6 +18,8 @@ const SEED = process.env.SEED || 'data/tcgdex.json';
 const LANG = process.env.TCGDEX_LANG || 'en';
 const CONC = Number(process.env.TCGDEX_CONCURRENCY || 8);
 const MAX_NEW = Number(process.env.TCGDEX_MAX_NEW || 30000);
+const REFRESH_MAX = Number(process.env.TCGDEX_REFRESH_MAX || 4000);
+const ENTRY_LEN = 5; // huidige entry-lengte; kortere entries (oud formaat) worden geleidelijk ververst
 export const IMAGE_PREFIX = 'https://assets.tcgdex.net/';
 
 async function getJson(url, attempt = 1) {
@@ -43,7 +46,7 @@ export function compactEntry(card) {
   const cm = card?.pricing?.cardmarket?.idProduct;
   if (!cm || !card.id) return null;
   const img = typeof card.image === 'string' && card.image.startsWith(IMAGE_PREFIX) ? card.image.slice(IMAGE_PREFIX.length) : '';
-  return [cm, [card.id, String(card.localId ?? ''), img, card.regulationMark || '']]; // 4e element: regulatiemerk (rotatie)
+  return [cm, [card.id, String(card.localId ?? ''), img, card.regulationMark || '', card.rarity || '']]; // 4e: regulatiemerk, 5e: rarity
 }
 
 async function main() {
@@ -51,8 +54,8 @@ async function main() {
   const known = new Set(Object.values(map).map((v) => v[0]));
   // Kaarten zonder Cardmarket-id worden onthouden en pas na 30 dagen opnieuw geprobeerd.
   const noCmMap = new Map(noCm.map((x) => [x[0], x[1]]));
-  // Entries zonder regulatiemerk-veld (oud formaat) worden opnieuw opgehaald zolang TCGDEX_REFRESH_OLD=1.
-  const oldFormat = new Set(process.env.TCGDEX_REFRESH_OLD ? Object.values(map).filter((v) => v.length < 4).map((v) => v[0]) : []);
+  // Entries in een ouder formaat (zonder regulatiemerk of rarity) worden per run in porties opnieuw opgehaald.
+  const oldFormat = new Set(Object.values(map).filter((v) => v.length < ENTRY_LEN).map((v) => v[0]).slice(0, REFRESH_MAX));
   const skip = (id) => (known.has(id) && !oldFormat.has(id)) || (noCmMap.has(id) && Date.now() - noCmMap.get(id) < 30 * 864e5);
   let all = [];
   try { all = await getJson(`https://api.tcgdex.net/v2/${LANG}/cards`); if (!Array.isArray(all) || all.length < 1000) throw new Error(`onverwachte kaartenlijst (${Array.isArray(all) ? all.length : typeof all})`); }
@@ -64,7 +67,7 @@ async function main() {
     return;
   }
   const todo = all.filter((c) => !skip(c.id)).slice(0, MAX_NEW);
-  console.log(`TCGdex: ${all.length} kaarten, ${known.size} al gekoppeld, ${noCmMap.size} zonder Cardmarket-id, ${todo.length} op te halen`);
+  console.log(`TCGdex: ${all.length} kaarten, ${known.size} al gekoppeld (${oldFormat.size} te verversen voor rarity), ${noCmMap.size} zonder Cardmarket-id, ${todo.length} op te halen`);
   let done = 0; let linked = 0; let failed = 0;
   const worker = async () => {
     while (todo.length) {
