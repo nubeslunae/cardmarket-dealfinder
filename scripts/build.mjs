@@ -116,7 +116,15 @@ async function main() {
   const shards = buildShards(joined, SHARD_COUNT);
   const expansions = buildExpansions(joined, known);
 
+  // Bestanden van optionele stappen (JustTCG, CardTrader) van de vorige versie meenemen; de stappen zelf
+  // overschrijven ze als ze draaien. Zonder dit verdwijnen ze bij een build waarin de stap wordt overgeslagen.
+  const carry = [];
+  for (const file of ['justtcg.json', 'cardtrader/map.json']) {
+    const prev = await liveJson(file);
+    if (prev) carry.push([file, prev]);
+  }
   await rm(OUT_DIR, { recursive: true, force: true });
+  for (const [file, data] of carry) await writeJson(path.join(OUT_DIR, file), data);
   await writeJson(path.join(OUT_DIR, 'deals.json'), { columns: DEALS_COLUMNS, minTrend: DEALS_MIN_TREND, rows: deals });
   await writeJson(path.join(OUT_DIR, 'index.json'), { columns: INDEX_COLUMNS, rows: index });
   await writeJson(path.join(OUT_DIR, 'expansions.json'), expansions);
