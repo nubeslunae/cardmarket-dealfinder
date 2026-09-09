@@ -62,7 +62,9 @@ async function main() {
       try {
         const card = await getJson(`https://api.tcgdex.net/v2/${LANG}/cards/${encodeURIComponent(c.id)}`);
         const e = compactEntry(card);
-        if (e) { map[e[0]] = e[1]; linked += 1; noCmMap.delete(c.id); } else noCmMap.set(c.id, Date.now());
+        if (e && map[e[0]] && map[e[0]][0] !== c.id) noCmMap.set(c.id, Date.now()); // dubbele TCGdex-kaart voor hetzelfde Cardmarket-product: eerste wint
+        else if (e) { map[e[0]] = e[1]; linked += 1; noCmMap.delete(c.id); }
+        else noCmMap.set(c.id, Date.now());
       } catch { failed += 1; }
       done += 1;
       if (done % 500 === 0) console.log(`  ${done} verwerkt, ${linked} gekoppeld, ${failed} mislukt`);
