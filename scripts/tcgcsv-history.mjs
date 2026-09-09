@@ -4,7 +4,8 @@
 // Incrementeel: bestaande weken komen van de live site (vshist/N.json); alleen ontbrekende weken worden gedownload.
 //
 // Uitvoer: site/data/vshist/N.json (64 shards): { weeks: ['YYYY-MM-DD', ...], cards: { cmId: [market|null, ...] } }
-// Env: OUT_DIR (site/data), SITE_URL, VSHIST_WEEKS (max weken terug, default 130), VSHIST_MAX_FILES per run (default 40)
+// Env: OUT_DIR (site/data), SITE_URL, VSHIST_WEEKS (max weken terug, default 130), VSHIST_MAX_FILES per run (default 40),
+//      SEVENZ_BIN (pad naar 7z, default '7z')
 
 import { readFile, writeFile, mkdir, rm } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
@@ -21,6 +22,7 @@ const MAX_FILES = Number(process.env.VSHIST_MAX_FILES || 40);
 const SHARDS = 64;
 const FIRST = '2024-02-08';
 const UA = 'cardmarket-dealfinder (personal; github.com/nubeslunae/cardmarket-dealfinder)';
+const SEVENZ = process.env.SEVENZ_BIN || '7z'; // pad naar 7z (lokaal testen zonder systeem-7z)
 
 /** Maandagen (ISO-weken) van de laatste `weeks` weken, oplopend, niet vóór FIRST en niet later dan gisteren. */
 export function weekDates(weeks, now = new Date()) {
@@ -72,7 +74,9 @@ async function main() {
       const file = path.join(tmp, `${w}.7z`);
       await writeFile(file, Buffer.from(await r.arrayBuffer()));
       const dir = path.join(tmp, w);
-      await run('7z', ['x', '-y', `-o${dir}`, file, '3/*']); // alleen categorie 3 (Pokémon)
+      // Structuur in het archief: <datum>/<categoryId>/<groupId>/prices — alleen categorie 3 (Pokémon) uitpakken.
+      await run(SEVENZ, ['x', '-y', `-o${dir}`, file, `${w}/3/*`]);
+      if (!existsSync(path.join(dir, w, '3'))) await run(SEVENZ, ['x', '-y', `-o${dir}`, file]); // andere datummap: alles uitpakken
       const m = new Map();
       const { readdir } = await import('node:fs/promises');
       const walk = async (d) => { for (const e of await readdir(d, { withFileTypes: true })) { const f = path.join(d, e.name); if (e.isDirectory()) await walk(f); else if (e.name === 'prices') { try { const doc = JSON.parse(await readFile(f, 'utf8')); for (const [pid, price] of Object.entries(marketByProduct(doc.results || doc))) { const cm = tpToCm.get(pid); if (cm) m.set(cm, price); } } catch { /* overslaan */ } } } };
