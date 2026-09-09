@@ -1015,6 +1015,7 @@ function renderInfo() {
     ['Sets (met naam)', `${(m.counts.expansions || 0).toLocaleString('nl-NL')} (${m.expansionNames?.named ?? '?'})`],
     ['TCGdex-koppeling (nummers, afbeeldingen)', m.tcgdex ? `${(m.tcgdex.linked || 0).toLocaleString('nl-NL')} producten, ${fmtDate(m.tcgdex.syncedAt)}` : 'nog niet gesynchroniseerd'],
     ['CardTrader-koppeling', m.cardtrader ? `${(m.cardtrader.linked || 0).toLocaleString('nl-NL')} kaarten, ${fmtDate(m.cardtrader.syncedAt)}` : 'niet gesynchroniseerd (secret CARDTRADER_TOKEN ontbreekt)'],
+    ['VS-conditieprijzen (JustTCG)', m.justtcg ? `${(m.justtcg.cards || 0).toLocaleString('nl-NL')} kaarten, ${fmtDate(m.justtcg.updatedAt)}, maandbudget over: ${m.justtcg.monthlyRemaining ?? '?'}` : 'niet actief'],
   ];
   $('#facts').replaceChildren(...facts.flatMap(([k, v]) => { const dt = document.createElement('dt'); dt.textContent = k; const dd = document.createElement('dd'); dd.textContent = v; return [dt, dd]; }));
   $('#meta-line').textContent = `Pokémon · Cardmarket price guide ${fmtDate(g.createdAt)} · ${(m.counts.deals || 0).toLocaleString('nl-NL')} kaarten met trend ≥ ${fmtEur(m.dealsMinTrend ?? 3)} · historie ${historyDays()} dag(en)${m.cardtrader ? ' · CardTrader gekoppeld' : ''}`;
