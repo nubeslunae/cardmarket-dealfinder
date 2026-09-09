@@ -82,11 +82,23 @@ export function discount(price, reference) {
  */
 export function updateHistory(prev, joined, date, { days = HISTORY_DAYS, minTrend = 3 } = {}) {
   const base = prev && Array.isArray(prev.dates) && prev.n && prev.h ? prev : { dates: [], n: {}, h: {} };
-  if (base.dates.includes(date)) return base;
-  const dates = [...base.dates, date].slice(-days);
   const len = base.dates.length;
   const pad = (arr) => { const a = Array.isArray(arr) ? [...arr] : []; while (a.length < len) a.unshift(null); return a.slice(-len); };
   const series = (entry) => (Array.isArray(entry) ? { l: entry, a: [], s: [] } : entry || { l: [], a: [], s: [] });
+  if (base.dates.includes(date)) {
+    // Zelfde dag: niets toevoegen, maar wel het formaat normaliseren (oude arrays → {l,a,s}) en ontbrekende
+    // waarden van vandaag (7d-gem., 1d-gem.) invullen.
+    const idx = base.dates.indexOf(date);
+    const fix = (entry, avg7, avg1) => { const s = series(entry); const l = pad(s.l); const a = pad(s.a); const s1 = pad(s.s); if (a[idx] == null) a[idx] = avg7; if (s1[idx] == null) s1[idx] = avg1; return { l, a, s: s1 }; };
+    const n = {}; const h = {};
+    for (const p of joined) {
+      if (Math.max(p.n[1] ?? 0, p.h[1] ?? 0) < minTrend) continue;
+      if (base.n[p.id]) n[p.id] = fix(base.n[p.id], p.n[3], p.n[2]);
+      if (base.h[p.id]) h[p.id] = fix(base.h[p.id], p.h[3], p.h[2]);
+    }
+    return { dates: base.dates, n, h };
+  }
+  const dates = [...base.dates, date].slice(-days);
   const next = (entry, low, avg7, avg1) => {
     const s = series(entry);
     const l = [...pad(s.l), low].slice(-days);
