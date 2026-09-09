@@ -146,10 +146,12 @@ async function main() {
       deals: deals.length,
       expansions: expansions.length,
     },
-    // Meta van meegenomen optionele data (de stap zelf overschrijft dit als hij draait)
-    ...(carry.some(([f]) => f === 'justtcg.json') && live?.justtcg ? { justtcg: live.justtcg } : {}),
-    ...(carry.some(([f]) => f === 'cardtrader/map.json') && live?.cardtrader ? { cardtrader: live.cardtrader } : {}),
   };
+  // Meta van meegenomen optionele data, afgeleid uit de bestanden zelf (de stap overschrijft dit als hij draait)
+  for (const [file, data] of carry) {
+    if (file === 'justtcg.json') meta.justtcg = { updatedAt: data.updatedAt, cards: Object.keys(data.cards || {}).length, monthlyRemaining: data.usage?.monthlyRemaining ?? null, rate: data.rate || null, carried: true };
+    if (file === 'cardtrader/map.json') meta.cardtrader = { syncedAt: data.syncedAt, linked: Object.keys(data.byCardmarket || {}).length, expansions: (data.expansions || []).length, carried: true };
+  }
   await writeJson(path.join(OUT_DIR, 'meta.json'), meta);
   console.log(JSON.stringify(meta.counts));
   await setOutput('changed', 'true');
