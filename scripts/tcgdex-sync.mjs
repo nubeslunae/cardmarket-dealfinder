@@ -52,7 +52,15 @@ async function main() {
   // Kaarten zonder Cardmarket-id worden onthouden en pas na 30 dagen opnieuw geprobeerd.
   const noCmMap = new Map(noCm.map((x) => [x[0], x[1]]));
   const skip = (id) => known.has(id) || (noCmMap.has(id) && Date.now() - noCmMap.get(id) < 30 * 864e5);
-  const all = await getJson(`https://api.tcgdex.net/v2/${LANG}/cards`);
+  let all = [];
+  try { all = await getJson(`https://api.tcgdex.net/v2/${LANG}/cards`); }
+  catch (err) {
+    // TCGdex onbereikbaar: bestaande koppeling toch wegschrijven zodat de site nooit zonder zit.
+    await mkdir(OUT_DIR, { recursive: true });
+    await writeFile(path.join(OUT_DIR, 'tcgdex.json'), JSON.stringify(map));
+    console.warn(`TCGdex-lijst niet opgehaald (${err.message}); bestaande ${Object.keys(map).length} koppelingen behouden.`);
+    return;
+  }
   const todo = all.filter((c) => !skip(c.id)).slice(0, MAX_NEW);
   console.log(`TCGdex: ${all.length} kaarten, ${known.size} al gekoppeld, ${noCmMap.size} zonder Cardmarket-id, ${todo.length} op te halen`);
   let done = 0; let linked = 0; let failed = 0;

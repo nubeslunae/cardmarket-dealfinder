@@ -119,11 +119,15 @@ async function main() {
   // Bestanden van optionele stappen (JustTCG, CardTrader) van de vorige versie meenemen; de stappen zelf
   // overschrijven ze als ze draaien. Zonder dit verdwijnen ze bij een build waarin de stap wordt overgeslagen.
   const carry = [];
-  for (const file of ['justtcg.json', 'cardtrader/map.json', 'cmurl.json', 'cmurl-miss.json', 'tcgdex-nocm.json']) {
+  for (const file of ['justtcg.json', 'cardtrader/map.json', 'cmurl.json', 'cmurl-miss.json', 'tcgdex.json', 'tcgdex-nocm.json']) {
     const prev = await liveJson(file);
     if (prev) carry.push([file, prev]);
   }
   await rm(OUT_DIR, { recursive: true, force: true });
+  // Seeds uit de repo als basis; de live versies (groter/nieuwer) overschrijven ze; de sync-stappen daarna weer.
+  for (const [seed, file] of [['data/tcgdex.json', 'tcgdex.json'], ['data/cmurl.json', 'cmurl.json']]) {
+    if (existsSync(seed) && !carry.some(([f]) => f === file)) await writeJson(path.join(OUT_DIR, file), JSON.parse(await readFile(seed, 'utf8')));
+  }
   for (const [file, data] of carry) await writeJson(path.join(OUT_DIR, file), data);
   await writeJson(path.join(OUT_DIR, 'deals.json'), { columns: DEALS_COLUMNS, minTrend: DEALS_MIN_TREND, rows: deals });
   await writeJson(path.join(OUT_DIR, 'index.json'), { columns: INDEX_COLUMNS, rows: index });
@@ -151,6 +155,7 @@ async function main() {
   for (const [file, data] of carry) {
     if (file === 'justtcg.json') meta.justtcg = { updatedAt: data.updatedAt, cards: Object.keys(data.cards || {}).length, monthlyRemaining: data.usage?.monthlyRemaining ?? null, rate: data.rate || null, carried: true };
     if (file === 'cardtrader/map.json') meta.cardtrader = { syncedAt: data.syncedAt, linked: Object.keys(data.byCardmarket || {}).length, expansions: (data.expansions || []).length, carried: true };
+    if (file === 'cmurl.json') meta.cmurl = { linked: Object.keys(data).length, carried: true };
   }
   await writeJson(path.join(OUT_DIR, 'meta.json'), meta);
   console.log(JSON.stringify(meta.counts));
