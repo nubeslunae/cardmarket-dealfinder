@@ -31,10 +31,12 @@ async function loadExisting() {
   const local = path.resolve(SEED);
   let map = {};
   if (existsSync(local)) map = JSON.parse(await readFile(local, 'utf8'));
+  let noCm = [];
   if (SITE_URL) {
     try { const r = await fetch(`${SITE_URL}/data/tcgdex.json`, { cache: 'no-store' }); if (r.ok) Object.assign(map, await r.json()); } catch { /* eerste run */ }
+    try { const r = await fetch(`${SITE_URL}/data/tcgdex-nocm.json`, { cache: 'no-store' }); if (r.ok) noCm = await r.json(); } catch { /* eerste run */ }
   }
-  return map;
+  return { map, noCm: Array.isArray(noCm) ? noCm : [] };
 }
 
 export function compactEntry(card) {
@@ -45,11 +47,14 @@ export function compactEntry(card) {
 }
 
 async function main() {
-  const map = await loadExisting();
+  const { map, noCm } = await loadExisting();
   const known = new Set(Object.values(map).map((v) => v[0]));
+  // Kaarten zonder Cardmarket-id worden onthouden en pas na 30 dagen opnieuw geprobeerd.
+  const noCmMap = new Map(noCm.map((x) => [x[0], x[1]]));
+  const skip = (id) => known.has(id) || (noCmMap.has(id) && Date.now() - noCmMap.get(id) < 30 * 864e5);
   const all = await getJson(`https://api.tcgdex.net/v2/${LANG}/cards`);
-  const todo = all.filter((c) => !known.has(c.id)).slice(0, MAX_NEW);
-  console.log(`TCGdex: ${all.length} kaarten, ${known.size} al gekoppeld, ${todo.length} op te halen`);
+  const todo = all.filter((c) => !skip(c.id)).slice(0, MAX_NEW);
+  console.log(`TCGdex: ${all.length} kaarten, ${known.size} al gekoppeld, ${noCmMap.size} zonder Cardmarket-id, ${todo.length} op te halen`);
   let done = 0; let linked = 0; let failed = 0;
   const worker = async () => {
     while (todo.length) {
@@ -57,7 +62,7 @@ async function main() {
       try {
         const card = await getJson(`https://api.tcgdex.net/v2/${LANG}/cards/${encodeURIComponent(c.id)}`);
         const e = compactEntry(card);
-        if (e) { map[e[0]] = e[1]; linked += 1; }
+        if (e) { map[e[0]] = e[1]; linked += 1; noCmMap.delete(c.id); } else noCmMap.set(c.id, Date.now());
       } catch { failed += 1; }
       done += 1;
       if (done % 500 === 0) console.log(`  ${done} verwerkt, ${linked} gekoppeld, ${failed} mislukt`);
@@ -66,6 +71,7 @@ async function main() {
   await Promise.all(Array.from({ length: CONC }, worker));
   await mkdir(OUT_DIR, { recursive: true });
   await writeFile(path.join(OUT_DIR, 'tcgdex.json'), JSON.stringify(map));
+  await writeFile(path.join(OUT_DIR, 'tcgdex-nocm.json'), JSON.stringify([...noCmMap.entries()]));
   const metaFile = path.join(OUT_DIR, 'meta.json');
   if (existsSync(metaFile)) {
     const meta = JSON.parse(await readFile(metaFile, 'utf8'));

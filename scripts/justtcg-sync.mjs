@@ -64,18 +64,25 @@ export function extractCard(card, setMap, reverse) {
   return { cmId, n, h, tcgplayerId: card.tcgplayerId || null };
 }
 
-async function getJson(url, headers = {}) {
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+async function getJson(url, headers = {}, attempt = 1) {
   const r = await fetch(url, { headers: { Accept: 'application/json', ...headers } });
-  if (!r.ok) throw new Error(`${url} -> ${r.status}`);
+  if ((r.status === 429 || r.status >= 500) && attempt <= 3) { await sleep(15000 * attempt); return getJson(url, headers, attempt + 1); }
+  if (!r.ok) throw new Error(`${url.replace(/\?.*/, '')} -> ${r.status}`);
   return r.json();
 }
+const CALL_GAP_MS = Number(process.env.JUSTTCG_GAP_MS || 6500); // free tier: 10 calls per minuut
 
 async function main() {
   if (!KEY) { console.log('JUSTTCG_API_KEY ontbreekt; conditie-prijzen overgeslagen.'); return; }
   const H = { 'x-api-key': KEY };
   let calls = 0; let remainingMonth = Infinity;
+  let lastCall = 0;
   const api = async (p) => {
     if (calls >= MAX_CALLS || remainingMonth < RESERVE) return null;
+    const wait = lastCall + CALL_GAP_MS - Date.now();
+    if (wait > 0) await sleep(wait);
+    lastCall = Date.now();
     calls += 1;
     const j = await getJson(`${BASE}${p}`, H);
     const m = j?._metadata || {};
