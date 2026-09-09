@@ -95,7 +95,11 @@ test('updateHistory voegt een dag toe (laagste + 7d-gem.), lijnt uit, knipt af e
   assert.deepEqual(h1.h[10], { l: [3], a: [11], s: [10] });
   assert.equal(h1.n[13], undefined); // geen prijs
   assert.equal(h1.n[12], undefined); // trend 0.05 < minTrend
-  assert.equal(updateHistory(h1, joined, '2026-09-07', { days: 3, minTrend: 1 }), h1);
+  assert.deepEqual(updateHistory(h1, joined, '2026-09-07', { days: 3, minTrend: 1 }), h1);
+  // zelfde dag met oud formaat: normaliseren en waarden van vandaag invullen
+  const sameDayLegacy = updateHistory({ dates: ['2026-09-06', '2026-09-07'], n: { 10: [3, 2] }, h: { 10: [4, 3] } }, joined, '2026-09-07', { days: 3, minTrend: 1 });
+  assert.deepEqual(sameDayLegacy.n[10], { l: [3, 2], a: [null, 5], s: [null, 4] });
+  assert.deepEqual(sameDayLegacy.dates, ['2026-09-06', '2026-09-07']);
   const joined2 = joinProducts(products, guides.map((g) => (g.idProduct === 10 ? { ...g, low: 1 } : g)));
   const h2 = updateHistory(h1, joined2, '2026-09-08', { days: 3, minTrend: 1 });
   assert.deepEqual(h2.n[10].l, [2, 1]);
