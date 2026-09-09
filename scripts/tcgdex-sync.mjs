@@ -1,0 +1,80 @@
+#!/usr/bin/env node
+// Koppeling Cardmarket idProduct → TCGdex-kaart (kaartnummer, setcode, afbeelding) via de open TCGdex-API,
+// die per kaart Cardmarket's idProduct meelevert. Incrementeel: bestaande koppelingen (seed in de repo of
+// vorige versie op de live site) worden niet opnieuw opgehaald; alleen nieuwe TCGdex-kaarten.
+//
+// Uitvoer: site/data/tcgdex.json  { "<cmId>": ["<tcgdexId>", "<localId>", "<imageBase zonder prefix>"] , ... }
+// Env: OUT_DIR (default site/data), SITE_URL (vorige versie), SEED (default data/tcgdex.json),
+//      TCGDEX_CONCURRENCY (default 8), TCGDEX_MAX_NEW (default 30000), TCGDEX_LANG (default en)
+
+import { readFile, writeFile, mkdir } from 'node:fs/promises';
+import { existsSync } from 'node:fs';
+import path from 'node:path';
+
+const OUT_DIR = process.env.OUT_DIR || 'site/data';
+const SITE_URL = (process.env.SITE_URL || '').replace(/\/$/, '');
+const SEED = process.env.SEED || 'data/tcgdex.json';
+const LANG = process.env.TCGDEX_LANG || 'en';
+const CONC = Number(process.env.TCGDEX_CONCURRENCY || 8);
+const MAX_NEW = Number(process.env.TCGDEX_MAX_NEW || 30000);
+export const IMAGE_PREFIX = 'https://assets.tcgdex.net/';
+
+async function getJson(url, attempt = 1) {
+  const r = await fetch(url, { headers: { Accept: 'application/json', 'User-Agent': 'cardmarket-dealfinder (github pages, daily)' } });
+  if (r.status === 429 || r.status >= 500) { if (attempt <= 3) { await new Promise((x) => setTimeout(x, 1500 * attempt)); return getJson(url, attempt + 1); } throw new Error(`${url} -> ${r.status}`); }
+  if (r.status === 404) return null;
+  if (!r.ok) throw new Error(`${url} -> ${r.status}`);
+  return r.json();
+}
+
+async function loadExisting() {
+  const local = path.resolve(SEED);
+  let map = {};
+  if (existsSync(local)) map = JSON.parse(await readFile(local, 'utf8'));
+  if (SITE_URL) {
+    try { const r = await fetch(`${SITE_URL}/data/tcgdex.json`, { cache: 'no-store' }); if (r.ok) Object.assign(map, await r.json()); } catch { /* eerste run */ }
+  }
+  return map;
+}
+
+export function compactEntry(card) {
+  const cm = card?.pricing?.cardmarket?.idProduct;
+  if (!cm || !card.id) return null;
+  const img = typeof card.image === 'string' && card.image.startsWith(IMAGE_PREFIX) ? card.image.slice(IMAGE_PREFIX.length) : '';
+  return [cm, [card.id, String(card.localId ?? ''), img]];
+}
+
+async function main() {
+  const map = await loadExisting();
+  const known = new Set(Object.values(map).map((v) => v[0]));
+  const all = await getJson(`https://api.tcgdex.net/v2/${LANG}/cards`);
+  const todo = all.filter((c) => !known.has(c.id)).slice(0, MAX_NEW);
+  console.log(`TCGdex: ${all.length} kaarten, ${known.size} al gekoppeld, ${todo.length} op te halen`);
+  let done = 0; let linked = 0; let failed = 0;
+  const worker = async () => {
+    while (todo.length) {
+      const c = todo.shift();
+      try {
+        const card = await getJson(`https://api.tcgdex.net/v2/${LANG}/cards/${encodeURIComponent(c.id)}`);
+        const e = compactEntry(card);
+        if (e) { map[e[0]] = e[1]; linked += 1; }
+      } catch { failed += 1; }
+      done += 1;
+      if (done % 500 === 0) console.log(`  ${done} verwerkt, ${linked} gekoppeld, ${failed} mislukt`);
+    }
+  };
+  await Promise.all(Array.from({ length: CONC }, worker));
+  await mkdir(OUT_DIR, { recursive: true });
+  await writeFile(path.join(OUT_DIR, 'tcgdex.json'), JSON.stringify(map));
+  const metaFile = path.join(OUT_DIR, 'meta.json');
+  if (existsSync(metaFile)) {
+    const meta = JSON.parse(await readFile(metaFile, 'utf8'));
+    meta.tcgdex = { syncedAt: new Date().toISOString(), linked: Object.keys(map).length, newThisRun: linked, failed };
+    await writeFile(metaFile, JSON.stringify(meta));
+  }
+  console.log(`klaar: ${Object.keys(map).length} Cardmarket-producten gekoppeld (${linked} nieuw, ${failed} mislukt)`);
+}
+
+if (process.argv[1] && import.meta.url.endsWith(path.basename(process.argv[1]))) {
+  main().catch((err) => { console.error(`TCGdex-sync mislukt: ${err.message}`); process.exit(0); });
+}

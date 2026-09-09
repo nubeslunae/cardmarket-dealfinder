@@ -9,9 +9,12 @@ export const DEALS_COLUMNS = [
   'id', 'name', 'exp',
   'low', 'trend', 'avg1', 'avg7', 'avg30',
   'hLow', 'hTrend', 'hAvg1', 'hAvg7', 'hAvg30',
-  'prevLow', 'hPrevLow', // laagste "laagste" van de voorgaande dagen (historie), null zonder historie
+  'prevLow', 'hPrevLow',       // laagste "laagste" van de vorige 7 dagen (null zonder historie)
+  'yLow', 'hYLow',             // "laagste" van gisteren
+  'daysAtLow', 'hDaysAtLow',   // aantal voorgaande dagen waarop de laagste al (vrijwel) dezelfde prijs had
 ];
-export const HISTORY_DAYS = 8; // vandaag + 7 voorgaande dagen
+export const HISTORY_DAYS = 60;   // vandaag + 59 voorgaande dagen
+export const HISTORY_SHARDS = 64;
 
 export const INDEX_COLUMNS = ['id', 'name', 'exp'];
 
@@ -70,31 +73,83 @@ export function discount(price, reference) {
 }
 
 /**
- * Dagelijkse historie van "laagste" per product, zodat een nieuwe daling zichtbaar wordt.
- * prev: { dates: ['YYYY-MM-DD', ...], n: { id: [low...] }, h: { id: [low...] } } (arrays uitgelijnd met dates).
+ * Dagelijkse historie per product: "laagste" (l) en 7d-verkoopgemiddelde (a), voor normaal (n) en holo (h).
+ * prev: { dates: ['YYYY-MM-DD', ...], n: { id: { l: [...], a: [...] } }, h: {...} } (arrays uitgelijnd met dates).
  * Zelfde datum nogmaals → ongewijzigd. Alleen producten met trend ≥ minTrend worden bijgehouden.
+ * Oud formaat (n[id] = [low...]) wordt automatisch omgezet.
  */
 export function updateHistory(prev, joined, date, { days = HISTORY_DAYS, minTrend = 3 } = {}) {
   const base = prev && Array.isArray(prev.dates) && prev.n && prev.h ? prev : { dates: [], n: {}, h: {} };
   if (base.dates.includes(date)) return base;
   const dates = [...base.dates, date].slice(-days);
-  const pad = (arr) => { const a = Array.isArray(arr) ? [...arr] : []; while (a.length < base.dates.length) a.unshift(null); return a.slice(-base.dates.length); };
+  const len = base.dates.length;
+  const pad = (arr) => { const a = Array.isArray(arr) ? [...arr] : []; while (a.length < len) a.unshift(null); return a.slice(-len); };
+  const series = (entry) => (Array.isArray(entry) ? { l: entry, a: [] } : entry || { l: [], a: [] });
+  const next = (entry, low, avg7) => {
+    const s = series(entry);
+    const l = [...pad(s.l), low].slice(-days);
+    const a = [...pad(s.a), avg7].slice(-days);
+    return l.some((v) => v != null) || a.some((v) => v != null) ? { l, a } : null;
+  };
   const n = {}; const h = {};
   for (const p of joined) {
     if (Math.max(p.n[1] ?? 0, p.h[1] ?? 0) < minTrend) continue;
-    const an = [...pad(base.n[p.id]), p.n[0]].slice(-days);
-    const ah = [...pad(base.h[p.id]), p.h[0]].slice(-days);
-    if (an.some((v) => v != null)) n[p.id] = an;
-    if (ah.some((v) => v != null)) h[p.id] = ah;
+    const en = next(base.n[p.id], p.n[0], p.n[3]);
+    const eh = next(base.h[p.id], p.h[0], p.h[3]);
+    if (en) n[p.id] = en;
+    if (eh) h[p.id] = eh;
   }
   return { dates, n, h };
 }
 
-/** Laagste waarde van de voorgaande dagen (alles behalve de laatste), null als er geen historie is. */
-export function priorMin(arr) {
-  if (!Array.isArray(arr) || arr.length < 2) return null;
-  const prev = arr.slice(0, -1).filter((v) => v != null);
+/** Splitst een historie in shards (id % count), elk met dezelfde dates. */
+export function shardHistory(history, count = HISTORY_SHARDS) {
+  const shards = Array.from({ length: count }, () => ({ dates: history.dates, n: {}, h: {} }));
+  for (const key of ['n', 'h']) for (const [id, s] of Object.entries(history[key])) shards[Number(id) % count][key][id] = s;
+  return shards;
+}
+
+/** Voegt shards (of null-waarden) weer samen tot één historie. */
+export function mergeHistoryShards(shards) {
+  const out = { dates: [], n: {}, h: {} };
+  for (const s of shards) {
+    if (!s || !Array.isArray(s.dates)) continue;
+    if (s.dates.length > out.dates.length) out.dates = s.dates;
+    Object.assign(out.n, s.n || {});
+    Object.assign(out.h, s.h || {});
+  }
+  return out;
+}
+
+const lows = (entry) => (Array.isArray(entry) ? entry : entry?.l) || [];
+
+/** Laagste van de vorige `window` dagen (zonder vandaag), null zonder historie. */
+export function priorMin(entry, window = 7) {
+  const arr = lows(entry);
+  if (arr.length < 2) return null;
+  const prev = arr.slice(Math.max(0, arr.length - 1 - window), -1).filter((v) => v != null);
   return prev.length ? Math.min(...prev) : null;
+}
+
+/** "Laagste" van gisteren (de dag vóór de laatste), null zonder historie. */
+export function yesterdayLow(entry) {
+  const arr = lows(entry);
+  return arr.length >= 2 ? arr[arr.length - 2] ?? null : null;
+}
+
+/** Aantal aaneengesloten voorgaande dagen waarop de laagste al binnen 2 % van vandaag lag. */
+export function daysAtSameLow(entry, tolerance = 0.02) {
+  const arr = lows(entry);
+  if (arr.length < 2) return 0;
+  const today = arr[arr.length - 1];
+  if (today == null) return 0;
+  let days = 0;
+  for (let i = arr.length - 2; i >= 0; i -= 1) {
+    const v = arr[i];
+    if (v == null || Math.abs(v - today) > tolerance * today) break;
+    days += 1;
+  }
+  return days;
 }
 
 /** Rijen voor de deals-tabel: alleen producten waarvan normaal óf holo trend ≥ minTrend. */
@@ -103,9 +158,12 @@ export function buildDeals(joined, { minTrend = 3, history = null } = {}) {
   for (const p of joined) {
     const best = Math.max(p.n[1] ?? 0, p.h[1] ?? 0);
     if (best < minTrend) continue;
-    const prevLow = history ? priorMin(history.n[p.id]) : null;
-    const hPrevLow = history ? priorMin(history.h[p.id]) : null;
-    rows.push([p.id, p.name, p.exp, ...p.n, ...p.h, prevLow, hPrevLow]);
+    const en = history ? history.n[p.id] : null;
+    const eh = history ? history.h[p.id] : null;
+    rows.push([p.id, p.name, p.exp, ...p.n, ...p.h,
+      en ? priorMin(en) : null, eh ? priorMin(eh) : null,
+      en ? yesterdayLow(en) : null, eh ? yesterdayLow(eh) : null,
+      en ? daysAtSameLow(en) : 0, eh ? daysAtSameLow(eh) : 0]);
   }
   rows.sort((a, b) => a[0] - b[0]);
   return rows;

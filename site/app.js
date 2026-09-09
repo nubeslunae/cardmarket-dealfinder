@@ -3,22 +3,29 @@
 import {
   DEFAULT_SETTINGS, normalizeListing, passesFilters, landedCost, resaleMargin, adjustedReference, optimizeBasket,
 } from './lib/landed.js';
-import { splitName, cardmarketCardUrl, cardmarketSetUrl, cardmarketSearchUrl, cardtraderUrl, isAsianSetName, suggestedBuyPrice, pricechartingUrl } from './lib/links.js';
+import {
+  splitName, cardmarketCardUrl, cardmarketSetUrl, cardmarketSearchUrl, cardtraderUrl, isAsianSetName, suggestedBuyPrice, pricechartingUrl,
+} from './lib/links.js';
 
-const LS = { filters: 'cmdf.filters', watchlist: 'cmdf.watchlist', wlFilters: 'cmdf.wlfilters', token: 'cmdf.ct.token', ctSettings: 'cmdf.ct.settings', liveFilters: 'cmdf.livefilters', ignored: 'cmdf.ignored' };
+const LS = {
+  filters: 'cmdf.filters', costs: 'cmdf.costs', trendFilters: 'cmdf.trendfilters', watchlist: 'cmdf.watchlist', wlFilters: 'cmdf.wlfilters',
+  inventory: 'cmdf.inventory', token: 'cmdf.ct.token', ctSettings: 'cmdf.ct.settings', liveFilters: 'cmdf.livefilters', ignored: 'cmdf.ignored',
+};
 const PAGE_SIZE = 200;
 const CT_BASE = 'https://api.cardtrader.com/api/v2';
-const CT_DELAY_MS = 250; // 4 requests/s; CardTrader staat 10/s toe op marketplace
+const CT_DELAY_MS = 250;
+const TCGDEX_IMG = 'https://assets.tcgdex.net/';
+// Kolommen deals-rij: id,name,exp, low,trend,avg1,avg7,avg30, hLow..hAvg30, prevLow,hPrevLow, yLow,hYLow, daysAtLow,hDaysAtLow
 const OFFSET = { n: 3, h: 8 };
+const COL = { prevLow: { n: 13, h: 14 }, yLow: { n: 15, h: 16 }, daysAtLow: { n: 17, h: 18 } };
 
 const state = {
-  meta: null, deals: [], expansions: new Map(), index: null, shards: new Map(),
-  filters: loadJson(LS.filters, {}), wlFilters: loadJson(LS.wlFilters, {}), liveFilters: loadJson(LS.liveFilters, {}),
-  watchlist: loadWatchlist(), visible: PAGE_SIZE, liveVisible: PAGE_SIZE,
-  ignored: new Set(loadJson(LS.ignored, [])), history: null,
+  meta: null, deals: [], expansions: new Map(), index: null, indexById: null, shards: new Map(), hist: new Map(), tcgdex: null,
+  filters: loadJson(LS.filters, {}), costs: loadJson(LS.costs, {}), trendFilters: loadJson(LS.trendFilters, {}), wlFilters: loadJson(LS.wlFilters, {}), liveFilters: loadJson(LS.liveFilters, {}),
+  watchlist: loadList(LS.watchlist), inventory: loadList(LS.inventory), visible: PAGE_SIZE, liveVisible: PAGE_SIZE,
+  ignored: new Set(loadJson(LS.ignored, [])),
   ct: { token: loadRaw(LS.token), settings: { ...DEFAULT_SETTINGS, ...loadJson(LS.ctSettings, {}) }, map: null, byBlueprint: null, expansions: [], abort: false, busy: false },
-  live: [],          // genormaliseerde listings verrijkt met Cardmarket-referentie
-  liveWatch: [],     // resultaat van laatste watchlist-check (voor het mandje)
+  live: [], liveWatch: [], results: [],
 };
 
 /* ---------- helpers ---------- */
@@ -27,6 +34,7 @@ const $$ = (s, r = document) => [...r.querySelectorAll(s)];
 const EUR = new Intl.NumberFormat('nl-NL', { style: 'currency', currency: 'EUR' });
 const fmtEur = (v) => (v == null || Number.isNaN(v) ? '–' : EUR.format(v));
 const fmtPct = (v) => (v == null || Number.isNaN(v) ? '–' : `${Math.round(v * 100)} %`);
+const fmtSigned = (v) => (v == null || Number.isNaN(v) ? '–' : `${v > 0 ? '+' : ''}${Math.round(v * 100)} %`);
 const fmtDate = (iso) => { if (!iso) return '–'; const d = new Date(iso); return Number.isNaN(d.getTime()) ? iso : d.toLocaleString('nl-NL', { dateStyle: 'medium', timeStyle: 'short' }); };
 const disc = (price, ref) => (price == null || ref == null || ref <= 0 ? null : 1 - price / ref);
 const num = (v) => (v === '' || v == null ? null : Number(v));
@@ -37,8 +45,9 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 function loadRaw(key) { try { return localStorage.getItem(key); } catch { return null; } }
 function loadJson(key, fallback) { try { const v = localStorage.getItem(key); return v ? JSON.parse(v) : fallback; } catch { return fallback; } }
 function save(key, value) { try { localStorage.setItem(key, typeof value === 'string' ? value : JSON.stringify(value)); } catch { /* privémodus */ } }
-function loadWatchlist() { const l = loadJson(LS.watchlist, []); return Array.isArray(l) ? l.filter((w) => Number.isInteger(w.id)) : []; }
+function loadList(key) { const l = loadJson(key, []); return Array.isArray(l) ? l.filter((w) => Number.isInteger(w.id)) : []; }
 function saveWatchlist() { save(LS.watchlist, state.watchlist); $('#wl-count').textContent = String(state.watchlist.length); }
+function saveInventory() { save(LS.inventory, state.inventory); $('#inv-count').textContent = String(state.inventory.length); }
 
 function expLabel(expId) {
   const e = state.expansions.get(expId);
@@ -48,15 +57,17 @@ function expLabel(expId) {
 }
 const gameSlug = () => state.meta?.game?.slug || 'Pokemon';
 const cardmarketUrl = (name) => cardmarketSearchUrl(gameSlug(), name);
-/** Naam als "<b>Charizard ex</b> <span>Burning Darkness</span>" zodat de exacte uitvoering leesbaar is. */
-function nameHtml(name) {
+function tcgdexOf(id) { const e = state.tcgdex?.[id]; return e ? { tcgId: e[0], number: e[1], image: e[2] ? `${TCGDEX_IMG}${e[2]}` : null } : null; }
+function nameHtml(name, id, variant = 'n') {
   const { base, attacks } = splitName(name);
-  return `<strong>${escapeHtml(base)}</strong>${attacks.length ? ` <span class="attacks">${escapeHtml(attacks.join(' · '))}</span>` : ''}`;
+  const inner = `<strong>${escapeHtml(base)}</strong>${attacks.length ? ` <span class="attacks">${escapeHtml(attacks.join(' · '))}</span>` : ''}`;
+  return id != null ? `<a class="namelink" data-open="${id}" data-variant="${variant}" title="Details">${inner}</a>` : inner;
 }
-function linksHtml(name, exp) {
-  return `<a href="${cardmarketCardUrl(gameSlug(), name)}" target="_blank" rel="noopener" title="Exacte kaart op Cardmarket, alle uitvoeringen">Kaart ↗</a> <a href="${cardmarketSetUrl(gameSlug(), name, exp)}" target="_blank" rel="noopener" title="Deze uitvoering: singles van deze set, gefilterd op naam">In set ↗</a> <a href="${pricechartingUrl(name, expLabel(exp))}" target="_blank" rel="noopener" title="PriceCharting: prijzen per grade (Ungraded, 7–9.5, PSA 10) in USD">PSA ↗</a>`;
+function linksHtml(name, exp, id) {
+  const t = id != null ? tcgdexOf(id) : null;
+  const pc = pricechartingUrl(t?.number ? `${splitName(name).base} ${t.number}` : name, expLabel(exp));
+  return `<a href="${cardmarketCardUrl(gameSlug(), name)}" target="_blank" rel="noopener" title="Exacte kaart op Cardmarket, alle uitvoeringen">Kaart ↗</a> <a href="${cardmarketSetUrl(gameSlug(), name, exp)}" target="_blank" rel="noopener" title="Deze uitvoering: singles van deze set, gefilterd op naam">In set ↗</a> <a href="${pc}" target="_blank" rel="noopener" title="PriceCharting: prijzen per grade (USD)">PSA ↗</a>`;
 }
-
 async function fetchJson(path) {
   const r = await fetch(path, { cache: 'no-cache' });
   if (!r.ok) throw new Error(`${path}: ${r.status}`);
@@ -74,6 +85,49 @@ function pricesFor(id, variant) {
   const o = variant === 'h' ? 5 : 0;
   return { low: arr[o], trend: arr[o + 1], avg1: arr[o + 2], avg7: arr[o + 3], avg30: arr[o + 4] };
 }
+async function ensureHistFor(ids) {
+  const count = state.meta?.history?.shards || 64;
+  const needed = [...new Set(ids.map((id) => id % count))].filter((n) => !state.hist.has(n));
+  await Promise.all(needed.map(async (n) => { try { state.hist.set(n, await fetchJson(`data/hist/${n}.json`)); } catch { state.hist.set(n, { dates: [], n: {}, h: {} }); } }));
+}
+function histFor(id, variant) {
+  const count = state.meta?.history?.shards || 64;
+  const s = state.hist.get(id % count);
+  const e = s?.[variant === 'h' ? 'h' : 'n']?.[id];
+  if (!e) return null;
+  const l = Array.isArray(e) ? e : e.l || [];
+  return { dates: s.dates || [], l, a: Array.isArray(e) ? [] : e.a || [] };
+}
+async function ensureTcgdex() {
+  if (state.tcgdex) return state.tcgdex;
+  try { state.tcgdex = await fetchJson('data/tcgdex.json'); } catch { state.tcgdex = {}; }
+  return state.tcgdex;
+}
+async function ensureJustTcg() {
+  if (state.justtcg !== undefined) return state.justtcg;
+  try { state.justtcg = await fetchJson('data/justtcg.json'); } catch { state.justtcg = null; }
+  return state.justtcg;
+}
+/** Conditie-prijzen (TCGplayer via JustTCG, USD → EUR) voor een kaart, of null. */
+function conditionPrices(id, variant) {
+  const j = state.justtcg; const c = j?.cards?.[id]; const rate = j?.rate?.usd_eur;
+  if (!c || !rate) return null;
+  const src = c[variant === 'h' ? 'h' : 'n'] || {};
+  const out = {}; for (const [k, v] of Object.entries(src)) out[k] = v * rate;
+  return Object.keys(out).length ? { eur: out, updated: c.u, rate } : null;
+}
+function conditionPricesHtml(id, variant) {
+  const cp = conditionPrices(id, variant);
+  if (!cp) return '';
+  const order = ['NM', 'LP', 'MP', 'HP', 'DMG'];
+  return `<span class="cond-note">VS-markt per conditie (TCGplayer via JustTCG, omgerekend, ${escapeHtml(cp.updated)}): ${order.filter((k) => cp.eur[k] != null).map((k) => `<b>${k}</b> ${fmtEur(cp.eur[k])}`).join(' · ')}</span>`;
+}
+async function ensureIndex() {
+  if (state.index) return state.index;
+  state.index = (await fetchJson('data/index.json')).rows;
+  state.indexById = new Map(state.index.map((r) => [r[0], r]));
+  return state.index;
+}
 function bindForm(form, obj, defaults, onChange) {
   const merged = { ...defaults, ...obj };
   for (const [k, v] of Object.entries(merged)) {
@@ -82,12 +136,13 @@ function bindForm(form, obj, defaults, onChange) {
   }
   Object.assign(obj, merged);
   form.addEventListener('input', () => {
-    for (const el of form.elements) {
-      if (!el.name) continue;
-      obj[el.name] = el.type === 'checkbox' ? el.checked : el.value;
-    }
+    for (const el of form.elements) { if (!el.name) continue; obj[el.name] = el.type === 'checkbox' ? el.checked : el.value; }
     onChange();
   });
+}
+function resetForm(form, obj, defaults) {
+  Object.assign(obj, defaults);
+  for (const [k, v] of Object.entries(defaults)) { const el = form.elements[k]; if (el) { if (el.type === 'checkbox') el.checked = v; else el.value = v; } }
 }
 
 /* ---------- tabs + deelbare URL (#tab?filter=…) ---------- */
@@ -99,8 +154,7 @@ function readHash() {
   return { tab, params };
 }
 function writeHash(tab) {
-  const current = readHash();
-  const t = tab || current.tab || 'deals';
+  const t = tab || readHash().tab || 'deals';
   let query = '';
   if (t === 'deals') {
     const diff = Object.entries(state.filters).filter(([k, v]) => String(v) !== String(DEAL_DEFAULTS[k] ?? '')).map(([k, v]) => [k, typeof v === 'boolean' ? (v ? '1' : '0') : String(v)]);
@@ -117,22 +171,63 @@ function showTab(name) {
   $$('.tab').forEach((b) => b.classList.toggle('is-active', b.dataset.tab === name));
   $$('.panel').forEach((p) => p.classList.toggle('is-active', p.id === `tab-${name}`));
   if (name === 'watchlist') renderWatchlist();
+  if (name === 'inventory') renderInventory();
+  if (name === 'trends') renderTrends();
   if (name === 'live') initLiveOnce();
   writeHash(name);
 }
 
+/* ---------- metrics ---------- */
+const COST_DEFAULTS = { sellCommissionPct: 5, buyShipping: 1.5 };
+function marginOf(low, refVal) {
+  if (low == null || refVal == null) return null;
+  return refVal * (1 - (Number(state.costs.sellCommissionPct) || 0) / 100) - low - (Number(state.costs.buyShipping) || 0);
+}
+function evaluate(row, variant, ref = state.filters.ref || 'avg7') {
+  const o = OFFSET[variant];
+  const [low, trend, avg1, avg7, avg30] = row.slice(o, o + 5);
+  const prevLow = row[COL.prevLow[variant]] ?? null;
+  const yLow = row[COL.yLow[variant]] ?? null;
+  const daysAtLow = row[COL.daysAtLow[variant]] ?? 0;
+  const refVal = { trend, avg7, avg30 }[ref] ?? avg7;
+  const refs = [trend, avg7, avg30].filter((v) => v != null && v > 0);
+  const spread = refs.length >= 2 ? Math.max(...refs) / Math.min(...refs) : 1;
+  const reasons = [];
+  if (spread > 3) reasons.push('referentie inconsistent (trend/7d/30d > 3× uiteen)');
+  if (low != null && trend != null && low < 0.1 * trend) reasons.push('laagste < 10 % van trend: waarschijnlijk andere conditie/taal');
+  if (low != null && low < 1) reasons.push('laagste onder €1');
+  let fresh = 'unknown';
+  if (low != null && yLow != null) {
+    if (prevLow != null && low <= 0.7 * prevLow) fresh = 'new';
+    else if (daysAtLow >= 1) fresh = 'same';
+    else if (low < yLow * 0.98) fresh = 'lower';
+    else if (low > yLow * 1.02) fresh = 'higher';
+    else fresh = 'same';
+  } else if (low != null && prevLow != null && low <= 0.7 * prevLow) fresh = 'new';
+  return {
+    id: row[0], name: row[1], exp: row[2], variant, low, trend, avg1, avg7, avg30, prevLow, yLow, daysAtLow, refVal, fresh,
+    dRef: disc(low, refVal), dNew: disc(low, prevLow), dSold: disc(avg1, avg7), dWeek: disc(avg7, avg30),
+    gap: low != null && refVal != null ? refVal - low : null, margin: marginOf(low, refVal),
+    plausible: reasons.length === 0, reasons,
+  };
+}
+const FRESH_LABEL = { new: 'nieuw laag', lower: 'lager dan gisteren', same: 'stond gisteren al', higher: 'hoger dan gisteren', unknown: '–' };
+function freshHtml(d) {
+  const t = d.fresh === 'same' && d.daysAtLow > 1 ? `al ${d.daysAtLow} dagen` : FRESH_LABEL[d.fresh];
+  const title = d.fresh === 'unknown' ? 'Nog geen historie voor deze kaart' : `Gisteren: ${fmtEur(d.yLow)} · laagste vorige 7 dagen: ${fmtEur(d.prevLow)}`;
+  return `<span class="fresh ${d.fresh}" title="${escapeHtml(title)}">${t}</span>`;
+}
+const marginHtml = (m) => (m == null ? '–' : `<span class="margin ${m > 0 ? 'pos' : 'neg'}">${fmtEur(m)}</span>`);
+
 /* ---------- deals ---------- */
-const DEAL_DEFAULTS = { signal: 'low', ref: 'avg7', variant: 'n', minTrend: 10, maxTrend: '', minLow: '', maxLow: '', minDisc: 25, maxDisc: 70, expq: '', exp: '', sort: 'gap', q: '', onlyDouble: false, hideWatched: false, showIgnored: false, plausibleOnly: true, hideAsian: true };
-const PREV_LOW_INDEX = { n: 13, h: 14 };
+const DEAL_DEFAULTS = { signal: 'low', ref: 'avg7', variant: 'n', minTrend: 10, maxTrend: '', minLow: '', maxLow: '', minDisc: 25, maxDisc: 70, minMargin: '', expq: '', exp: '', sort: 'margin', q: '', hideStale: true, onlyDouble: false, hideWatched: false, showIgnored: false, plausibleOnly: true, hideAsian: true };
 function initDeals() {
   const form = $('#filters');
-  // Filters uit een gedeelde link overschrijven de opgeslagen filters.
   const { params } = readHash();
   for (const [k, v] of Object.entries(params)) if (k in DEAL_DEFAULTS) state.filters[k] = typeof DEAL_DEFAULTS[k] === 'boolean' ? v === '1' : v;
   bindForm(form, state.filters, DEAL_DEFAULTS, () => { save(LS.filters, state.filters); state.visible = PAGE_SIZE; fillExpansionSelect(); writeHash('deals'); renderDeals(); });
-  // In-place, want bindForm houdt een verwijzing naar dit object vast.
-  const applyDefaults = () => { Object.assign(state.filters, DEAL_DEFAULTS); save(LS.filters, state.filters); for (const [k, v] of Object.entries(DEAL_DEFAULTS)) { const el = form.elements[k]; if (el) { if (el.type === 'checkbox') el.checked = v; else el.value = v; } } fillExpansionSelect(); writeHash('deals'); renderDeals(); };
-  $('#filters-reset').addEventListener('click', applyDefaults);
+  bindForm($('#costs'), state.costs, COST_DEFAULTS, () => { save(LS.costs, state.costs); renderDeals(); if ($('#tab-inventory').classList.contains('is-active')) renderInventory(); });
+  $('#filters-reset').addEventListener('click', () => { resetForm(form, state.filters, DEAL_DEFAULTS); save(LS.filters, state.filters); fillExpansionSelect(); writeHash('deals'); renderDeals(); });
   $('#deals-more').addEventListener('click', () => { state.visible += PAGE_SIZE; renderDeals(); });
   $('#deals-table').addEventListener('click', onDealsClick);
   $$('#deals-table th[data-sort]').forEach((th) => th.addEventListener('click', () => { state.filters.sort = th.dataset.sort; form.elements.sort.value = th.dataset.sort; save(LS.filters, state.filters); writeHash('deals'); renderDeals(); }));
@@ -153,67 +248,36 @@ function fillExpansionSelect() {
   sel.replaceChildren(new Option(q ? `alle ${list.length} gevonden sets` : 'alle sets', ''), ...opts);
   if (current && [...sel.options].some((o) => o.value === current)) sel.value = current; else if (current) { state.filters.exp = ''; sel.value = ''; }
 }
-function exportCsv() {
-  const rows = state.results || [];
-  const head = ['id', 'kaart', 'set', 'variant', 'laagste', 'vorige7d', 'trend', 'gem1d', 'gem7d', 'gem30d', 'referentie', 'verschil', 'eronder_pct', 'cardmarket_kaart', 'cardmarket_set'];
-  const cell = (v) => (v == null ? '' : typeof v === 'number' ? String(v).replace('.', ',') : `"${String(v).replace(/"/g, '""')}"`);
-  const lines = [head.join(';')];
-  for (const d of rows) lines.push([d.id, d.name, expLabel(d.exp), d.variant === 'h' ? 'holo' : 'normaal', d.low, d.prevLow, d.trend, d.avg1, d.avg7, d.avg30, d.refVal, d.gap, d.score == null ? null : Math.round(d.score * 100), cardmarketCardUrl(gameSlug(), d.name), cardmarketSetUrl(gameSlug(), d.name, d.exp)].map(cell).join(';'));
-  const csv = `﻿${lines.join('\n')}`;
-  try {
-    const a = document.createElement('a'); a.href = URL.createObjectURL(new Blob([csv], { type: 'text/csv;charset=utf-8' })); a.download = `deals-${new Date().toISOString().slice(0, 10)}.csv`; a.click();
-    setTimeout(() => URL.revokeObjectURL(a.href), 5000);
-    $('#deals-summary').textContent = `${rows.length} rijen geëxporteerd als CSV (puntkomma-gescheiden, opent direct in Excel).`;
-  } catch {
-    navigator.clipboard?.writeText(csv).then(() => { $('#deals-summary').textContent = `${rows.length} rijen als CSV naar het klembord gekopieerd.`; }).catch(() => {});
-  }
-}
-function evaluate(row, variant, ref = state.filters.ref || 'avg7') {
-  const o = OFFSET[variant];
-  const [low, trend, avg1, avg7, avg30] = row.slice(o, o + 5);
-  const prevLow = row[PREV_LOW_INDEX[variant]] ?? null;
-  const refVal = { trend, avg7, avg30 }[ref] ?? avg7;
-  // Plausibiliteit: referentiewaarden (trend, 7d, 30d) moeten elkaar bevestigen, en een "laagste" onder
-  // 10 % van de trend of onder €1 is vrijwel altijd een beschadigd of anderstalig exemplaar (of al weg).
-  const refs = [trend, avg7, avg30].filter((v) => v != null && v > 0);
-  const spread = refs.length >= 2 ? Math.max(...refs) / Math.min(...refs) : 1;
-  const reasons = [];
-  if (spread > 3) reasons.push('referentie inconsistent (trend/7d/30d > 3× uiteen)');
-  if (low != null && trend != null && low < 0.1 * trend) reasons.push('laagste < 10 % van trend: waarschijnlijk andere conditie/taal');
-  if (low != null && low < 1) reasons.push('laagste onder €1');
-  return {
-    id: row[0], name: row[1], exp: row[2], variant, low, trend, avg1, avg7, avg30, prevLow, refVal,
-    dRef: disc(low, refVal), dNew: disc(low, prevLow), dSold: disc(avg1, avg7), dWeek: disc(avg7, avg30),
-    gap: low != null && refVal != null ? refVal - low : null, plausible: reasons.length === 0, reasons,
-  };
-}
+function asianSetIds() { return new Set([...state.expansions.values()].filter((e) => isAsianSetName(e.name)).map((e) => e.id)); }
+function historyDays() { return state.meta?.history?.dates?.length || 0; }
 function computeDeals() {
   const f = state.filters;
   const variants = f.variant === 'both' ? ['n', 'h'] : [f.variant];
   const minDisc = Number(f.minDisc) / 100;
   const maxDisc = f.maxDisc === '' || f.maxDisc == null ? null : Number(f.maxDisc) / 100;
+  const minMargin = num(f.minMargin);
   const minTrend = Number(f.minTrend) || 0, maxTrend = num(f.maxTrend), minLow = num(f.minLow), maxLow = num(f.maxLow);
   const exp = f.exp ? Number(f.exp) : null;
   const q = (f.q || '').toLowerCase();
   const watched = new Set(state.watchlist.map((w) => `${w.id}:${w.variant}`));
-  const asianSets = new Set([...state.expansions.values()].filter((e) => isAsianSetName(e.name)).map((e) => e.id));
-  const out = [];
-  let hiddenImplausible = 0;
+  const asian = asianSetIds();
+  const out = []; let hiddenImplausible = 0; let hiddenStale = 0;
   for (const row of state.deals) {
     if (exp != null && row[2] !== exp) continue;
-    if (f.hideAsian && asianSets.has(row[2])) continue;
+    if (f.hideAsian && asian.has(row[2])) continue;
     if (q && !row[1].toLowerCase().includes(q) && String(row[2]) !== q) continue;
     for (const v of variants) {
       const d = evaluate(row, v);
       if (d.trend == null || d.trend < minTrend || (maxTrend != null && d.trend > maxTrend)) continue;
       if (f.plausibleOnly && !d.plausible) { hiddenImplausible += 1; continue; }
+      if (f.hideStale && d.fresh === 'same') { hiddenStale += 1; continue; }
       if (minLow != null && (d.low == null || d.low < minLow)) continue;
       if (maxLow != null && (d.low == null || d.low > maxLow)) continue;
       const primary = { low: d.dRef, new: d.dNew, sold: d.dSold, week: d.dWeek }[f.signal] ?? d.dRef;
       if (primary == null || primary < minDisc) continue;
       if (maxDisc != null && primary > maxDisc) continue;
+      if (minMargin != null && (d.margin == null || d.margin < minMargin)) continue;
       d.double = d.dRef != null && d.dSold != null && d.dRef >= minDisc && d.dSold >= 0.2;
-      d.isNew = d.dNew != null && d.dNew >= 0.3;
       d.ignored = state.ignored.has(`${d.id}:${d.variant}`);
       if (d.ignored && !f.showIgnored) continue;
       if (f.hideWatched && watched.has(`${d.id}:${d.variant}`)) continue;
@@ -223,14 +287,15 @@ function computeDeals() {
     }
   }
   const sorters = {
+    margin: (a, b) => (b.margin ?? -1e9) - (a.margin ?? -1e9),
     score: (a, b) => b.score - a.score || (b.trend ?? 0) - (a.trend ?? 0),
     trend: (a, b) => (b.trend ?? 0) - (a.trend ?? 0),
     low: (a, b) => (a.low ?? 1e9) - (b.low ?? 1e9),
     gap: (a, b) => (b.gap ?? -1e9) - (a.gap ?? -1e9),
     name: (a, b) => a.name.localeCompare(b.name),
   };
-  out.sort(sorters[f.sort] || sorters.score);
-  out.hiddenImplausible = hiddenImplausible;
+  out.sort(sorters[f.sort] || sorters.margin);
+  out.hiddenImplausible = hiddenImplausible; out.hiddenStale = hiddenStale;
   return out;
 }
 function renderDeals() {
@@ -243,12 +308,12 @@ function renderDeals() {
   const refText = { trend: 'trend', avg7: '7d-verkoopgemiddelde', avg30: '30d-verkoopgemiddelde' }[f.ref] || '7d-verkoopgemiddelde';
   const signalText = { low: `laagste listing onder ${refText}`, new: 'nieuw laag: onder de laagste van de vorige 7 dagen', sold: 'gisteren verkocht onder 7d-gem.', week: '7d-gem. onder 30d-gem.' }[f.signal];
   const guideDate = fmtDate(state.meta?.sources?.guide?.createdAt);
-  const hidden = results.hiddenImplausible ? ` · ${results.hiddenImplausible.toLocaleString('nl-NL')} onwaarschijnlijke verborgen` : '';
-  const histDays = state.meta?.history?.dates?.length || 0;
-  const histNote = f.signal === 'new' && histDays < 2 ? ' · Historie start bij de volgende price guide (morgen ~02:48); dit signaal heeft minstens 2 dagen nodig.' : '';
+  const hidden = `${results.hiddenImplausible ? ` · ${results.hiddenImplausible.toLocaleString('nl-NL')} onwaarschijnlijke verborgen` : ''}${results.hiddenStale ? ` · ${results.hiddenStale.toLocaleString('nl-NL')} verborgen die gisteren al zo laag stonden` : ''}`;
+  const days = historyDays();
+  const histNote = days < 2 ? ' Historie: 1 dag; versheid en "nieuw laag" werken vanaf morgen ~03:00.' : '';
   const range = f.maxDisc === '' || f.maxDisc == null ? `≥ ${f.minDisc} %` : `${f.minDisc}–${f.maxDisc} %`;
   $('#deals-summary').textContent = results.length
-    ? `${results.length.toLocaleString('nl-NL')} treffers · ${signalText} · trend ≥ ${fmtEur(Number(f.minTrend) || 0)} · ${range} eronder${f.exp ? ` · ${expLabel(Number(f.exp))}` : ''}${hidden} · prijzen van ${guideDate}. Dit is een shortlist, geen koopjeslijst: "laagste" is de goedkoopste listing in élke conditie en taal, zonder garantie dat die nog staat of zichtbaar is. Zie Uitleg voor de test en de koopworkflow.`
+    ? `${results.length.toLocaleString('nl-NL')} treffers · ${signalText} · trend ≥ ${fmtEur(Number(f.minTrend) || 0)} · ${range} eronder${f.exp ? ` · ${expLabel(Number(f.exp))}` : ''}${hidden} · prijzen van ${guideDate}. Marge is een bovengrens (conditie/taal van de laagste listing onbekend).${histNote}`
     : `Geen treffers met deze filters.${hidden}${histNote}`;
   $$('#deals-table th[data-sort]').forEach((th) => th.classList.toggle('sorted', th.dataset.sort === f.sort));
   $('#filters-desc').textContent = `${signalText.split(':')[0]} · ${f.minDisc}–${f.maxDisc || '∞'} % · trend ≥ €${f.minTrend}`;
@@ -257,9 +322,11 @@ function renderDeals() {
     if (d.ignored) tr.classList.add('ignored');
     const key = `${d.id}:${d.variant}`;
     tr.innerHTML = `
-      <td class="name">${nameHtml(d.name)}${d.variant === 'h' ? '<span class="badge accent">holo</span>' : ''}${d.isNew ? `<span class="badge good" title="Laagste lag de vorige 7 dagen nooit onder ${fmtEur(d.prevLow)}">nieuw laag</span>` : ''}${d.double ? '<span class="badge good">dubbel</span>' : ''}${d.plausible ? '' : `<span class="badge warn" title="${escapeHtml(d.reasons.join('; '))}">onwaarschijnlijk</span>`}<span class="set-inline">${escapeHtml(expLabel(d.exp))}</span></td>
+      <td class="name">${nameHtml(d.name, d.id, d.variant)}${d.variant === 'h' ? '<span class="badge accent">holo</span>' : ''}${d.fresh === 'new' ? '<span class="badge good">nieuw laag</span>' : ''}${d.double ? '<span class="badge good">dubbel</span>' : ''}${d.plausible ? '' : `<span class="badge warn" title="${escapeHtml(d.reasons.join('; '))}">onwaarschijnlijk</span>`}<span class="set-inline">${escapeHtml(expLabel(d.exp))}</span></td>
       <td class="opt"><span class="exp">${escapeHtml(expLabel(d.exp))}</span></td>
       <td class="num">${fmtEur(d.low)}</td>
+      <td class="opt">${freshHtml(d)}</td>
+      <td class="num">${marginHtml(d.margin)}</td>
       <td class="num opt">${fmtEur(d.prevLow)}</td>
       <td class="num opt">${fmtEur(d.trend)}</td>
       <td class="num opt">${fmtEur(d.avg1)}</td>
@@ -267,52 +334,78 @@ function renderDeals() {
       <td class="num opt">${fmtEur(d.avg30)}</td>
       <td class="num opt">${fmtEur(d.gap)}</td>
       <td class="num"><span class="disc${d.score >= 0.5 ? ' strong' : ''}">${fmtPct(d.score)}</span></td>
-      <td class="actions">${linksHtml(d.name, d.exp)}
+      <td class="actions">${linksHtml(d.name, d.exp, d.id)}
           <button type="button" data-add="${d.id}" data-variant="${d.variant}" ${watched.has(key) ? 'disabled' : ''}>${watched.has(key) ? 'op watchlist' : '+ watchlist'}</button>
-          <button type="button" data-ignore="${d.id}" data-variant="${d.variant}" title="${d.ignored ? 'Weer tonen' : 'Verberg deze kaart voortaan'}">${d.ignored ? 'toon weer' : 'negeer'}</button>
-          <button type="button" data-cond="${d.avg7 ?? ''}" title="Richtprijs per conditie (7d-gem. × correctie)">cond.</button></td>`;
+          <button type="button" data-inv="${d.id}" data-variant="${d.variant}" data-price="${d.low ?? ''}" title="Gekocht? Zet in voorraad">+ voorraad</button>
+          <button type="button" data-ignore="${d.id}" data-variant="${d.variant}">${d.ignored ? 'toon weer' : 'negeer'}</button>
+          <button type="button" data-cond="${d.avg7 ?? ''}" title="Richtprijs per conditie">cond.</button></td>`;
     return tr;
   }));
-  renderToday();
-  if (!shown.length) { const tr = document.createElement('tr'); tr.innerHTML = '<td colspan="11" class="empty">Niets gevonden. Verlaag de minimale trend of het minimale verschil, of kies een ander signaal of een andere set.</td>'; tbody.replaceChildren(tr); }
+  if (!shown.length) { const tr = document.createElement('tr'); tr.innerHTML = '<td colspan="13" class="empty">Niets gevonden. Verlaag de minimale trend, marge of het minimale verschil, of kies een ander signaal of een andere set.</td>'; tbody.replaceChildren(tr); }
   $('#deals-more').hidden = results.length <= state.visible;
+  renderToday();
 }
+function exportCsv() {
+  const rows = state.results || [];
+  const head = ['id', 'kaart', 'set', 'nummer', 'variant', 'laagste', 'versheid', 'marge', 'vorige7d', 'gisteren', 'trend', 'gem1d', 'gem7d', 'gem30d', 'referentie', 'verschil', 'eronder_pct', 'cardmarket_kaart', 'cardmarket_set'];
+  const cell = (v) => (v == null ? '' : typeof v === 'number' ? String(Math.round(v * 100) / 100).replace('.', ',') : `"${String(v).replace(/"/g, '""')}"`);
+  const lines = [head.join(';')];
+  for (const d of rows) lines.push([d.id, d.name, expLabel(d.exp), tcgdexOf(d.id)?.number ?? '', d.variant === 'h' ? 'holo' : 'normaal', d.low, FRESH_LABEL[d.fresh], d.margin, d.prevLow, d.yLow, d.trend, d.avg1, d.avg7, d.avg30, d.refVal, d.gap, d.score == null ? null : Math.round(d.score * 100), cardmarketCardUrl(gameSlug(), d.name), cardmarketSetUrl(gameSlug(), d.name, d.exp)].map(cell).join(';'));
+  downloadText(`deals-${new Date().toISOString().slice(0, 10)}.csv`, `﻿${lines.join('\n')}`, (n) => { $('#deals-summary').textContent = n; }, rows.length);
+}
+function downloadText(filename, text, report, count) {
+  try {
+    const a = document.createElement('a'); a.href = URL.createObjectURL(new Blob([text], { type: 'text/csv;charset=utf-8' })); a.download = filename; a.click();
+    setTimeout(() => URL.revokeObjectURL(a.href), 5000);
+    report(`${count} rijen geëxporteerd als CSV (puntkomma-gescheiden, opent direct in Excel).`);
+  } catch {
+    navigator.clipboard?.writeText(text).then(() => report(`${count} rijen als CSV naar het klembord gekopieerd.`)).catch(() => {});
+  }
+}
+
 /* "Vandaag": nieuwe dalingen en watchlist-treffers in één oogopslag. */
 let todayToken = 0;
 async function renderToday() {
   const box = $('#today'); if (!box || !state.deals.length) return;
   const token = ++todayToken;
-  const days = state.meta?.history?.dates?.length || 0;
+  const days = historyDays();
   const news = [];
   for (const row of state.deals) for (const v of ['n', 'h']) {
     const d = evaluate(row, v, 'avg7');
-    if (d.plausible && d.trend != null && d.trend >= 10 && d.dNew != null && d.dNew >= 0.3 && d.avg7 && d.low <= 0.75 * d.avg7 && !state.ignored.has(`${d.id}:${d.variant}`)) news.push(d);
+    if (d.plausible && d.trend != null && d.trend >= 10 && d.fresh === 'new' && d.avg7 && d.low <= 0.75 * d.avg7 && !state.ignored.has(`${d.id}:${d.variant}`)) news.push(d);
   }
-  news.sort((a, b) => (b.avg7 - b.low) - (a.avg7 - a.low));
+  news.sort((a, b) => (b.margin ?? 0) - (a.margin ?? 0));
   const hits = [];
   if (state.watchlist.length) {
     await ensureShardsFor(state.watchlist.map((w) => w.id));
     if (token !== todayToken) return;
     for (const w of state.watchlist) { const p = pricesFor(w.id, w.variant); if (p && p.low != null && w.max != null && p.low <= w.max) hits.push({ w, p }); }
   }
-  const li = (d) => `<li>${nameHtml(d.name)}${d.variant === 'h' ? ' <span class="badge accent">holo</span>' : ''} <span class="exp">${escapeHtml(expLabel(d.exp))}</span> · ${fmtEur(d.low)} <span class="exp">was ≥ ${fmtEur(d.prevLow)}, 7d-gem. ${fmtEur(d.avg7)}</span> ${linksHtml(d.name, d.exp)}</li>`;
+  const li = (d) => `<li>${nameHtml(d.name, d.id, d.variant)}${d.variant === 'h' ? ' <span class="badge accent">holo</span>' : ''} <span class="exp">${escapeHtml(expLabel(d.exp))}</span> · ${fmtEur(d.low)} <span class="exp">was ≥ ${fmtEur(d.prevLow)}, 7d-gem. ${fmtEur(d.avg7)}, marge ${fmtEur(d.margin)}</span> ${linksHtml(d.name, d.exp, d.id)}</li>`;
   box.hidden = false;
   box.innerHTML = `<div class="card-body">
     <div><h2>Nieuw laag sinds gisteren</h2>${days < 2
-      ? `<p class="msg">Historie: ${days} dag. Vanaf de tweede price guide (morgen ~03:00) verschijnen hier kaarten waarvan de laagste listing duidelijk onder die van de vorige 7 dagen zakte.</p>`
+      ? `<p class="msg">Historie: ${days} dag. Vanaf de tweede price guide (morgen ~03:00) verschijnen hier kaarten waarvan de laagste duidelijk onder die van de vorige 7 dagen zakte.</p>`
       : news.length ? `<ul>${news.slice(0, 8).map(li).join('')}</ul>${news.length > 8 ? `<p class="msg">${news.length - 8} meer via signaal "Nieuw laag".</p>` : ''}` : '<p class="msg">Geen nieuwe dalingen vandaag.</p>'}</div>
     <div><h2>Watchlist onder je max</h2>${state.watchlist.length
-      ? hits.length ? `<ul>${hits.map(({ w, p }) => `<li>${nameHtml(w.name)} <span class="exp">${escapeHtml(expLabel(w.exp))}</span> · ${fmtEur(p.low)} ≤ ${fmtEur(w.max)} ${linksHtml(w.name, w.exp)}</li>`).join('')}</ul>` : '<p class="msg">Geen watchlist-kaarten onder je maximum.</p>'
+      ? hits.length ? `<ul>${hits.map(({ w, p }) => `<li>${nameHtml(w.name, w.id, w.variant)} <span class="exp">${escapeHtml(expLabel(w.exp))}</span> · ${fmtEur(p.low)} ≤ ${fmtEur(w.max)} ${linksHtml(w.name, w.exp, w.id)}</li>`).join('')}</ul>` : '<p class="msg">Geen watchlist-kaarten onder je maximum.</p>'
       : '<p class="msg">Nog geen watchlist. Voeg kaarten toe met "+ watchlist".</p>'}</div>
   </div>`;
 }
-function toggleConditionNote(btn) {
+const CONDITION_FACTORS = [['NM', 1], ['EX/SP', 0.9], ['GD/MP', 0.75], ['LP/PL', 0.6], ['PO', 0.4]];
+function conditionNote(avg7) {
+  if (avg7 == null) return 'Geen 7d-verkoopgemiddelde, dus geen richtprijs per conditie.';
+  return `Richtprijs per conditie: ${CONDITION_FACTORS.map(([c, f]) => `<b>${c}</b> ${fmtEur(avg7 * f)}`).join(' · ')}`;
+}
+async function toggleConditionNote(btn) {
   const tr = btn.closest('tr'); const cell = tr?.querySelector('td.name'); if (!cell) return;
-  const existing = cell.querySelector('.cond-note');
-  if (existing) { existing.remove(); return; }
+  const existing = cell.querySelectorAll('.cond-note');
+  if (existing.length) { existing.forEach((e) => e.remove()); return; }
   const note = document.createElement('span'); note.className = 'cond-note';
   note.innerHTML = conditionNote(btn.dataset.cond === '' ? null : Number(btn.dataset.cond));
   cell.appendChild(note);
+  const link = cell.querySelector('a.namelink');
+  if (link) { await ensureJustTcg(); const extra = conditionPricesHtml(Number(link.dataset.open), link.dataset.variant || 'n'); if (extra && cell.contains(note)) note.insertAdjacentHTML('afterend', extra); }
 }
 function onDealsClick(ev) {
   const cond = ev.target.closest('button[data-cond]');
@@ -321,17 +414,68 @@ function onDealsClick(ev) {
   if (ign) {
     const key = `${ign.dataset.ignore}:${ign.dataset.variant}`;
     if (state.ignored.has(key)) state.ignored.delete(key); else state.ignored.add(key);
-    save(LS.ignored, [...state.ignored]);
-    $('#ignored-count').textContent = String(state.ignored.size);
-    renderDeals();
-    return;
+    save(LS.ignored, [...state.ignored]); $('#ignored-count').textContent = String(state.ignored.size); renderDeals(); return;
   }
+  const inv = ev.target.closest('button[data-inv]');
+  if (inv) { const row = state.deals.find((r) => r[0] === Number(inv.dataset.inv)); if (row) addToInventoryPrompt({ id: row[0], name: row[1], exp: row[2], variant: inv.dataset.variant, paid: num(inv.dataset.price) }); return; }
   const btn = ev.target.closest('button[data-add]'); if (!btn) return;
   const id = Number(btn.dataset.add);
   const row = state.deals.find((r) => r[0] === id); if (!row) return;
   const d = evaluate(row, btn.dataset.variant);
-  addToWatchlist({ id, name: d.name, exp: d.exp, variant: d.variant, max: d.low != null ? Math.ceil(d.low * 100) / 100 : null, added: Date.now() });
+  addToWatchlist({ id, name: d.name, exp: d.exp, variant: d.variant, max: d.low != null ? Math.ceil(d.low * 100) / 100 : null });
   btn.disabled = true; btn.textContent = 'op watchlist';
+}
+
+/* ---------- trends ---------- */
+const TREND_DEFAULTS = { period: 'd1', dir: 'up', variant: 'n', minTrend: 5, minChange: 15, q: '', hideAsian: true };
+function initTrends() {
+  bindForm($('#trend-filters'), state.trendFilters, TREND_DEFAULTS, () => { save(LS.trendFilters, state.trendFilters); renderTrends(); });
+  $('#trend-table').addEventListener('click', (ev) => {
+    const btn = ev.target.closest('button[data-add]'); if (!btn) return;
+    const row = state.deals.find((r) => r[0] === Number(btn.dataset.add)); if (!row) return;
+    const d = evaluate(row, btn.dataset.variant, 'avg7');
+    addToWatchlist({ id: d.id, name: d.name, exp: d.exp, variant: d.variant, max: suggestedBuyPrice(d.avg7) });
+    btn.disabled = true; btn.textContent = 'op watchlist';
+  });
+}
+function renderTrends() {
+  const f = state.trendFilters; const tbody = $('#trend-table tbody');
+  const variants = f.variant === 'both' ? ['n', 'h'] : [f.variant];
+  const minTrend = Number(f.minTrend) || 0; const minChange = (Number(f.minChange) || 0) / 100; const q = (f.q || '').toLowerCase();
+  const asian = asianSetIds();
+  const out = [];
+  for (const row of state.deals) {
+    if (f.hideAsian && asian.has(row[2])) continue;
+    if (q && !row[1].toLowerCase().includes(q) && !expLabel(row[2]).toLowerCase().includes(q)) continue;
+    for (const v of variants) {
+      const d = evaluate(row, v, 'avg7');
+      if (d.trend == null || d.trend < minTrend || !d.plausible) continue;
+      let from = null, to = null;
+      if (f.period === 'd1') { from = d.avg7; to = d.avg1; }
+      else if (f.period === 'w1') { from = d.avg30; to = d.avg7; }
+      else { from = d.prevLow; to = d.low; }
+      if (from == null || to == null || from <= 0) continue;
+      const change = to / from - 1;
+      if (f.dir === 'up' ? change < minChange : change > -minChange) continue;
+      out.push({ d, from, to, change });
+    }
+  }
+  out.sort((a, b) => (f.dir === 'up' ? b.change - a.change : a.change - b.change));
+  const periodText = { d1: 'gisteren t.o.v. 7d-gemiddelde', w1: '7d-gemiddelde t.o.v. 30d-gemiddelde', lowc: 'laagste t.o.v. laagste van 7 dagen geleden' }[f.period];
+  const days = historyDays();
+  $('#trend-summary').textContent = out.length ? `${out.length.toLocaleString('nl-NL')} ${f.dir === 'up' ? 'stijgers' : 'dalers'} · ${periodText} · ≥ ${f.minChange} % · trend ≥ ${fmtEur(minTrend)}` : `Geen ${f.dir === 'up' ? 'stijgers' : 'dalers'} met deze filters.${f.period === 'lowc' && days < 2 ? ' Deze periode heeft historie nodig (vanaf morgen).' : ''}`;
+  const watched = new Set(state.watchlist.map((w) => `${w.id}:${w.variant}`));
+  tbody.replaceChildren(...out.slice(0, 150).map(({ d, from, to, change }) => {
+    const tr = document.createElement('tr'); const key = `${d.id}:${d.variant}`;
+    tr.innerHTML = `<td class="name">${nameHtml(d.name, d.id, d.variant)}${d.variant === 'h' ? '<span class="badge accent">holo</span>' : ''}<span class="set-inline">${escapeHtml(expLabel(d.exp))}</span></td>
+      <td class="opt"><span class="exp">${escapeHtml(expLabel(d.exp))}</span></td>
+      <td class="num">${fmtEur(from)}</td><td class="num">${fmtEur(to)}</td>
+      <td class="num"><span class="${change > 0 ? 'pos' : 'neg'}">${fmtSigned(change)}</span></td>
+      <td class="num opt">${fmtEur(d.low)}</td><td class="num opt">${fmtEur(d.trend)}</td>
+      <td class="actions">${linksHtml(d.name, d.exp, d.id)} <button type="button" data-add="${d.id}" data-variant="${d.variant}" ${watched.has(key) ? 'disabled' : ''}>${watched.has(key) ? 'op watchlist' : '+ watchlist'}</button></td>`;
+    return tr;
+  }));
+  if (!out.length) { const tr = document.createElement('tr'); tr.innerHTML = '<td colspan="8" class="empty">Niets gevonden.</td>'; tbody.replaceChildren(tr); }
 }
 
 /* ---------- watchlist ---------- */
@@ -342,25 +486,12 @@ function addToWatchlist(item) {
   saveWatchlist();
   if ($('#tab-watchlist').classList.contains('is-active')) renderWatchlist();
 }
-async function ensureIndex() {
-  if (state.index) return state.index;
-  $('#wl-msg').textContent = 'Catalogus laden…';
-  state.index = (await fetchJson('data/index.json')).rows;
-  state.indexById = new Map(state.index.map((r) => [r[0], r]));
-  $('#wl-msg').textContent = '';
-  return state.index;
-}
-async function ensureHistory() {
-  if (state.history) return state.history;
-  try { state.history = await fetchJson('data/history.json'); } catch { state.history = { dates: [], n: {}, h: {} }; }
-  return state.history;
-}
-function sparkline(arr) {
+function sparkline(arr, w = 96, h = 24) {
   const vals = (arr || []).map((v) => (v == null ? null : Number(v)));
   const present = vals.filter((v) => v != null);
   if (present.length < 2) return '<span class="exp">–</span>';
   const min = Math.min(...present), max = Math.max(...present);
-  const w = 96, h = 24, n = vals.length;
+  const n = vals.length;
   const x = (i) => (n === 1 ? w / 2 : (i / (n - 1)) * (w - 4) + 2);
   const y = (v) => (max === min ? h / 2 : h - 3 - ((v - min) / (max - min)) * (h - 6));
   const pts = vals.map((v, i) => (v == null ? null : `${x(i).toFixed(1)},${y(v).toFixed(1)}`)).filter(Boolean).join(' ');
@@ -372,7 +503,7 @@ async function renderWatchlist() {
   const list = state.watchlist;
   $('#wl-count').textContent = String(list.length);
   if (!list.length) { const tr = document.createElement('tr'); tr.innerHTML = '<td colspan="11" class="empty">Nog leeg. Zoek hierboven een kaart of klik "+ watchlist" bij een deal.</td>'; tbody.replaceChildren(tr); $('#wl-summary').textContent = ''; return; }
-  await Promise.all([ensureShardsFor(list.map((w) => w.id)), ensureHistory()]);
+  await Promise.all([ensureShardsFor(list.map((w) => w.id)), ensureHistFor(list.map((w) => w.id))]);
   const f = state.wlFilters;
   const q = (f.q || '').toLowerCase();
   let rows = list.map((w, i) => { const p = pricesFor(w.id, w.variant); const hit = Boolean(p && p.low != null && w.max != null && p.low <= w.max); return { w, i, p, hit }; });
@@ -398,21 +529,43 @@ async function renderWatchlist() {
       else status = `<span class="badge warn">${fmtPct(-disc(w.max, p.low))} boven max</span>`;
     }
     const suggest = suggestedBuyPrice(p?.avg7);
-    const hist = state.history?.[w.variant === 'h' ? 'h' : 'n']?.[w.id];
+    const hist = histFor(w.id, w.variant);
     tr.innerHTML = `
-      <td class="name">${nameHtml(w.name)}<span class="set-inline">${escapeHtml(expLabel(w.exp))}</span></td>
+      <td class="name">${nameHtml(w.name, w.id, w.variant)}<span class="set-inline">${escapeHtml(expLabel(w.exp))}</span></td>
       <td class="opt"><span class="exp">${escapeHtml(expLabel(w.exp))}</span></td>
       <td><select class="variant" data-i="${i}"><option value="n"${w.variant === 'n' ? ' selected' : ''}>Normaal</option><option value="h"${w.variant === 'h' ? ' selected' : ''}>Holo</option></select></td>
       <td class="num"><input class="max" type="number" min="0" step="0.01" inputmode="decimal" data-i="${i}" value="${w.max ?? ''}" placeholder="max"></td>
       <td class="num">${suggest == null ? '–' : `<button type="button" data-suggest="${i}" data-value="${suggest}" title="Zet max op 75 % van het 7d-verkoopgemiddelde">${fmtEur(suggest)}</button>`}</td>
       <td class="num">${fmtEur(p?.low)}</td>
-      <td class="opt">${sparkline(hist)}</td>
+      <td class="opt">${sparkline(hist?.l)}</td>
       <td class="num opt">${fmtEur(p?.trend)}</td>
       <td class="num opt">${fmtEur(p?.avg7)}</td>
       <td>${status}</td>
-      <td class="actions">${linksHtml(w.name, w.exp)} <button type="button" data-cond="${p?.avg7 ?? ''}" title="Richtprijs per conditie">cond.</button> <button type="button" data-remove="${i}" title="Verwijderen">✕</button></td>`;
+      <td class="actions">${linksHtml(w.name, w.exp, w.id)} <button type="button" data-cond="${p?.avg7 ?? ''}" title="Richtprijs per conditie">cond.</button> <button type="button" data-remove="${i}" title="Verwijderen">✕</button></td>`;
     return tr;
   }));
+}
+function typeahead(input, ul, onPick) {
+  let timer = null;
+  input.addEventListener('input', () => {
+    clearTimeout(timer);
+    const q = input.value.trim().toLowerCase();
+    if (q.length < 3) { ul.hidden = true; return; }
+    timer = setTimeout(async () => {
+      let index; try { [index] = await Promise.all([ensureIndex(), ensureTcgdex()]); } catch { ul.innerHTML = '<li>Catalogus kon niet geladen worden.</li>'; ul.hidden = false; return; }
+      const terms = q.split(/\s+/); const found = [];
+      for (const row of index) { const n = row[1].toLowerCase(); const setName = expLabel(row[2]).toLowerCase(); if (terms.every((t) => n.includes(t) || setName.includes(t) || String(row[2]) === t)) { found.push(row); if (found.length >= 40) break; } }
+      ul.replaceChildren(...found.map((row) => {
+        const li = document.createElement('li'); const t = tcgdexOf(row[0]);
+        li.innerHTML = `${t?.image ? `<img src="${t.image}/low.webp" alt="" loading="lazy">` : ''}<span class="grow">${escapeHtml(row[1])}${t?.number ? ` <span class="exp">#${escapeHtml(t.number)}</span>` : ''}</span><span class="exp">${escapeHtml(expLabel(row[2]))}</span>`;
+        li.addEventListener('click', () => { ul.hidden = true; input.value = ''; onPick(row); });
+        return li;
+      }));
+      if (!found.length) { const li = document.createElement('li'); li.textContent = 'Geen kaarten gevonden.'; ul.replaceChildren(li); }
+      ul.hidden = false;
+    }, 150);
+  });
+  document.addEventListener('click', (ev) => { if (!ev.target.closest('.wl-add') && !ev.target.closest('.gsearch')) ul.hidden = true; });
 }
 function initWatchlist() {
   bindForm($('#wl-filters'), state.wlFilters, WL_DEFAULTS, () => { save(LS.wlFilters, state.wlFilters); renderWatchlist(); });
@@ -425,48 +578,27 @@ function initWatchlist() {
   table.addEventListener('input', onChange);
   table.addEventListener('change', onChange);
   table.addEventListener('click', (ev) => {
-    const cond = ev.target.closest('button[data-cond]');
-    if (cond) { toggleConditionNote(cond); return; }
+    const cond = ev.target.closest('button[data-cond]'); if (cond) { toggleConditionNote(cond); return; }
     const sug = ev.target.closest('button[data-suggest]');
     if (sug) { const w = state.watchlist[Number(sug.dataset.suggest)]; if (w) { w.max = Number(sug.dataset.value); saveWatchlist(); renderWatchlist(); } return; }
     const btn = ev.target.closest('button[data-remove]'); if (!btn) return;
     state.watchlist.splice(Number(btn.dataset.remove), 1); saveWatchlist(); renderWatchlist(); renderDeals();
   });
-
-  const input = $('#wl-search'); const ul = $('#wl-results'); let timer = null;
-  input.addEventListener('input', () => {
-    clearTimeout(timer);
-    const q = input.value.trim().toLowerCase();
-    if (q.length < 3) { ul.hidden = true; return; }
-    timer = setTimeout(async () => {
-      let index; try { index = await ensureIndex(); } catch { $('#wl-msg').textContent = 'Catalogus kon niet geladen worden.'; return; }
-      const terms = q.split(/\s+/); const found = [];
-      for (const row of index) { const n = row[1].toLowerCase(); if (terms.every((t) => n.includes(t) || String(row[2]) === t)) { found.push(row); if (found.length >= 60) break; } }
-      ul.replaceChildren(...found.map((row) => {
-        const li = document.createElement('li');
-        li.innerHTML = `<span>${escapeHtml(row[1])}</span><span class="exp">${escapeHtml(expLabel(row[2]))}</span>`;
-        li.addEventListener('click', () => { addToWatchlist({ id: row[0], name: row[1], exp: row[2], variant: 'n', max: null }); ul.hidden = true; input.value = ''; renderWatchlist(); });
-        return li;
-      }));
-      if (!found.length) { const li = document.createElement('li'); li.textContent = 'Geen kaarten gevonden.'; ul.replaceChildren(li); }
-      ul.hidden = false;
-    }, 150);
-  });
-  document.addEventListener('click', (ev) => { if (!ev.target.closest('.wl-add')) ul.hidden = true; });
+  typeahead($('#wl-search'), $('#wl-results'), (row) => { addToWatchlist({ id: row[0], name: row[1], exp: row[2], variant: 'n', max: null }); renderWatchlist(); });
 
   const io = $('#wl-io'); const msg = $('#wl-msg');
   $('#wl-copy-names').addEventListener('click', async () => {
     await ensureShardsFor(state.watchlist.map((w) => w.id));
-    const lines = state.watchlist.map((w) => {
-      const p = pricesFor(w.id, w.variant);
-      const buy = w.max ?? suggestedBuyPrice(p?.avg7);
-      return `${cleanName(w.name)}\t${expLabel(w.exp)}\t${w.variant === 'h' ? 'reverse holo' : 'normaal'}\tkoopprijs ${buy == null ? '?' : fmtEur(buy)}${w.max == null ? ' (voorstel: 75 % van 7d-gem.)' : ''}`;
-    });
+    const lines = ['Cardmarket wants list — per kaart: Language: English · Min. condition: Good · Buy price hieronder · Email Alarm aan', ''];
+    for (const w of state.watchlist) {
+      const p = pricesFor(w.id, w.variant); const buy = w.max ?? suggestedBuyPrice(p?.avg7); const t = tcgdexOf(w.id);
+      lines.push(`${cleanName(w.name)}${t?.number ? ` #${t.number}` : ''}\t${expLabel(w.exp)}\t${w.variant === 'h' ? 'reverse holo' : 'normaal'}\tkoopprijs ${buy == null ? '?' : fmtEur(buy)}${w.max == null ? ' (voorstel: 75 % van 7d-gem.)' : ''}`);
+    }
     const text = lines.join('\n');
-    try { await navigator.clipboard.writeText(text); msg.textContent = `${state.watchlist.length} regels gekopieerd (naam, set, variant, koopprijs). Zet ze in je Cardmarket wants list met taal Engels, minimale conditie en Email Alarm; zie Uitleg.`; }
+    try { await navigator.clipboard.writeText(text); msg.textContent = `${state.watchlist.length} regels gekopieerd, met de voorwaarden Engels + Good of beter erbij. Plak ze in je Cardmarket wants list en zet daar per kaart die filters, de Buy price en Email Alarm.`; }
     catch { io.hidden = false; io.value = text; msg.textContent = 'Kopieer de regels hieronder handmatig.'; }
   });
-  $('#wl-export').addEventListener('click', () => { io.hidden = false; io.value = JSON.stringify(state.watchlist, null, 2); io.select(); msg.textContent = 'Bewaar deze JSON als back-up.'; });
+  $('#wl-export').addEventListener('click', () => { io.hidden = false; io.value = JSON.stringify(state.watchlist, null, 2); io.select(); msg.textContent = 'Bewaar deze JSON als back-up (of als data/watchlist.json in de repo voor de Telegram-digest).'; });
   $('#wl-import').addEventListener('click', () => {
     if (io.hidden) { io.hidden = false; io.value = ''; io.placeholder = 'Plak hier je JSON-export en klik opnieuw op Importeer'; msg.textContent = ''; return; }
     try {
@@ -483,8 +615,144 @@ function initWatchlist() {
   $('#wl-live').addEventListener('click', () => { showTab('live'); checkWatchlistLive(); });
 }
 
+/* ---------- voorraad ---------- */
+function addToInventoryPrompt(item) {
+  const paid = prompt(`Betaald per stuk voor ${cleanName(item.name)} (€)?`, item.paid != null ? String(Math.round(item.paid * 100) / 100) : '');
+  if (paid == null) return;
+  const qty = prompt('Aantal?', '1');
+  if (qty == null) return;
+  state.inventory.push({ id: item.id, name: item.name, exp: item.exp ?? null, variant: item.variant === 'h' ? 'h' : 'n', qty: Math.max(1, Number(qty) || 1), paid: Number(String(paid).replace(',', '.')) || 0, date: new Date().toISOString().slice(0, 10) });
+  saveInventory();
+  if ($('#tab-inventory').classList.contains('is-active')) renderInventory();
+}
+async function renderInventory() {
+  const list = state.inventory; const tbody = $('#inv-table tbody');
+  $('#inv-count').textContent = String(list.length);
+  const commission = (Number(state.costs.sellCommissionPct) || 0) / 100;
+  if (!list.length) { const tr = document.createElement('tr'); tr.innerHTML = '<td colspan="11" class="empty">Nog leeg. Zoek hierboven een kaart of klik "+ voorraad" bij een deal.</td>'; tbody.replaceChildren(tr); $('#inv-summary').innerHTML = '<div><div class="k">Voorraad</div><div class="v">leeg</div></div>'; return; }
+  await Promise.all([ensureShardsFor(list.map((w) => w.id)), ensureHistFor(list.map((w) => w.id))]);
+  let paidTotal = 0, valueTotal = 0, netTotal = 0;
+  const rows = list.map((w, i) => {
+    const p = pricesFor(w.id, w.variant); const value = p?.avg7 ?? null; const net = value == null ? null : value * (1 - commission);
+    const qty = Number(w.qty) || 1; const paid = Number(w.paid) || 0;
+    paidTotal += paid * qty; if (value != null) { valueTotal += value * qty; netTotal += net * qty; }
+    return { w, i, p, value, net, qty, paid, profit: net == null ? null : (net - paid) * qty };
+  });
+  $('#inv-summary').innerHTML = [['Kaarten', `${list.reduce((n, w) => n + (Number(w.qty) || 1), 0)}`], ['Betaald', fmtEur(paidTotal)], ['Waarde nu (7d-gem.)', fmtEur(valueTotal)], ['Netto na commissie', fmtEur(netTotal)], ['Winst', `<span class="${netTotal - paidTotal >= 0 ? 'pos' : 'neg'}">${fmtEur(netTotal - paidTotal)}</span>`]].map(([k, v]) => `<div><div class="k">${k}</div><div class="v">${v}</div></div>`).join('');
+  tbody.replaceChildren(...rows.map(({ w, i, p, value, net, qty, paid, profit }) => {
+    const tr = document.createElement('tr');
+    tr.innerHTML = `<td class="name">${nameHtml(w.name, w.id, w.variant)}<span class="set-inline">${escapeHtml(expLabel(w.exp))} · ${w.date || ''}</span></td>
+      <td class="opt"><span class="exp">${escapeHtml(expLabel(w.exp))}</span></td>
+      <td>${w.variant === 'h' ? 'Holo' : 'Normaal'}</td>
+      <td class="num"><input class="small" type="number" min="1" step="1" data-inv-qty="${i}" value="${qty}"></td>
+      <td class="num"><input class="small" type="number" min="0" step="0.01" data-inv-paid="${i}" value="${paid}"></td>
+      <td class="num">${fmtEur(value)}</td>
+      <td class="num opt">${fmtEur(net)}</td>
+      <td class="num">${profit == null ? '–' : `<span class="${profit >= 0 ? 'pos' : 'neg'}">${fmtEur(profit)}</span>`}</td>
+      <td class="num opt">${profit == null || paid <= 0 ? '–' : fmtSigned(profit / (paid * qty))}</td>
+      <td class="opt">${sparkline(histFor(w.id, w.variant)?.a)}</td>
+      <td class="actions">${linksHtml(w.name, w.exp, w.id)} <button type="button" data-inv-remove="${i}" title="Verwijderen">✕</button></td>`;
+    return tr;
+  }));
+}
+function initInventory() {
+  const table = $('#inv-table');
+  table.addEventListener('change', (ev) => {
+    const el = ev.target;
+    if (el.matches('[data-inv-qty]')) { const w = state.inventory[Number(el.dataset.invQty)]; if (w) { w.qty = Math.max(1, Number(el.value) || 1); saveInventory(); renderInventory(); } }
+    if (el.matches('[data-inv-paid]')) { const w = state.inventory[Number(el.dataset.invPaid)]; if (w) { w.paid = Number(el.value) || 0; saveInventory(); renderInventory(); } }
+  });
+  table.addEventListener('click', (ev) => { const btn = ev.target.closest('button[data-inv-remove]'); if (!btn) return; state.inventory.splice(Number(btn.dataset.invRemove), 1); saveInventory(); renderInventory(); });
+  typeahead($('#inv-search'), $('#inv-results'), (row) => addToInventoryPrompt({ id: row[0], name: row[1], exp: row[2], variant: 'n', paid: null }));
+  const io = $('#inv-io'); const msg = $('#inv-msg');
+  $('#inv-export').addEventListener('click', () => { io.hidden = false; io.value = JSON.stringify(state.inventory, null, 2); io.select(); msg.textContent = 'Bewaar deze JSON als back-up.'; });
+  $('#inv-import').addEventListener('click', () => {
+    if (io.hidden) { io.hidden = false; io.value = ''; io.placeholder = 'Plak hier je JSON-export en klik opnieuw op Importeer'; msg.textContent = ''; return; }
+    try {
+      const parsed = JSON.parse(io.value); if (!Array.isArray(parsed)) throw new Error('geen lijst');
+      let added = 0;
+      for (const w of parsed) if (Number.isInteger(w.id) && typeof w.name === 'string') { state.inventory.push({ id: w.id, name: w.name, exp: w.exp ?? null, variant: w.variant === 'h' ? 'h' : 'n', qty: Math.max(1, Number(w.qty) || 1), paid: Number(w.paid) || 0, date: w.date || '' }); added += 1; }
+      saveInventory(); io.hidden = true; msg.textContent = `${added} regels toegevoegd.`; renderInventory();
+    } catch (e) { msg.textContent = `Import mislukt: ${e.message}`; }
+  });
+  $('#inv-csv').addEventListener('click', async () => {
+    await ensureShardsFor(state.inventory.map((w) => w.id));
+    const commission = (Number(state.costs.sellCommissionPct) || 0) / 100;
+    const cell = (v) => (v == null ? '' : typeof v === 'number' ? String(Math.round(v * 100) / 100).replace('.', ',') : `"${String(v).replace(/"/g, '""')}"`);
+    const lines = ['id;kaart;set;variant;aantal;betaald_pst;datum;waarde_nu;netto_pst;winst'];
+    for (const w of state.inventory) { const p = pricesFor(w.id, w.variant); const v = p?.avg7 ?? null; const net = v == null ? null : v * (1 - commission); lines.push([w.id, w.name, expLabel(w.exp), w.variant, w.qty, w.paid, w.date, v, net, net == null ? null : (net - w.paid) * w.qty].map(cell).join(';')); }
+    downloadText(`voorraad-${new Date().toISOString().slice(0, 10)}.csv`, `﻿${lines.join('\n')}`, (n) => { msg.textContent = n; }, state.inventory.length);
+  });
+}
+
+/* ---------- detailpaneel ---------- */
+function chartSvg(hist, w = 600, h = 160) {
+  if (!hist || !hist.dates?.length) return '<p class="msg">Nog geen historie voor deze kaart.</p>';
+  const series = [['low', hist.l], ['avg', hist.a]];
+  const all = [...hist.l, ...hist.a].filter((v) => v != null);
+  if (all.length < 2) return '<p class="msg">Historie start; grafiek verschijnt vanaf de tweede dag.</p>';
+  const min = Math.min(...all), max = Math.max(...all); const n = hist.dates.length;
+  const px = 36, py = 10;
+  const x = (i) => px + (n === 1 ? 0 : (i / (n - 1)) * (w - px - 8));
+  const y = (v) => (max === min ? h / 2 : h - py - 14 - ((v - min) / (max - min)) * (h - py * 2 - 14));
+  const line = (arr, cls) => `<polyline class="${cls}" points="${arr.map((v, i) => (v == null ? null : `${x(i).toFixed(1)},${y(v).toFixed(1)}`)).filter(Boolean).join(' ')}"/>`;
+  const fmtD = (d) => (d ? d.slice(5).replace('-', '/') : '');
+  return `<svg class="chart" viewBox="0 0 ${w} ${h}" preserveAspectRatio="none">
+    <line x1="${px}" y1="${y(max).toFixed(1)}" x2="${w - 8}" y2="${y(max).toFixed(1)}"/><line x1="${px}" y1="${y(min).toFixed(1)}" x2="${w - 8}" y2="${y(min).toFixed(1)}"/>
+    <text x="2" y="${(y(max) + 4).toFixed(1)}">${fmtEur(max)}</text><text x="2" y="${(y(min) + 4).toFixed(1)}">${fmtEur(min)}</text>
+    <text x="${px}" y="${h - 2}">${fmtD(hist.dates[0])}</text><text x="${w - 40}" y="${h - 2}">${fmtD(hist.dates[n - 1])}</text>
+    ${series.map(([cls, arr]) => line(arr, cls)).join('')}
+  </svg><p class="legend"><i class="l1"></i>laagste <i class="l2"></i>7d-verkoopgemiddelde · ${n} dag(en)</p>`;
+}
+async function openDetail(id, variant = 'n') {
+  const dlg = $('#detail'); const body = $('#detail-body');
+  body.innerHTML = '<p class="msg">Laden…</p>';
+  if (!dlg.open) dlg.showModal();
+  await Promise.all([ensureShardsFor([id]), ensureHistFor([id]), ensureTcgdex(), ensureIndex(), ensureJustTcg()]);
+  const row = state.deals.find((r) => r[0] === id) || state.indexById?.get(id);
+  const name = row ? row[1] : `#${id}`; const exp = row ? row[2] : null;
+  const dealRow = state.deals.find((r) => r[0] === id);
+  const t = tcgdexOf(id);
+  const p = { n: pricesFor(id, 'n'), h: pricesFor(id, 'h') };
+  const d = dealRow ? evaluate(dealRow, variant, 'avg7') : null;
+  const watched = state.watchlist.some((w) => w.id === id && w.variant === variant);
+  const metrics = (v) => { const q = p[v]; if (!q || q.trend == null) return ''; return `<h3>${v === 'h' ? 'Holo / reverse' : 'Normaal'}</h3><div class="metrics">${[['Laagste', q.low], ['Trend', q.trend], ['Gem. 1d', q.avg1], ['Gem. 7d', q.avg7], ['Gem. 30d', q.avg30], ['Marge (bovengrens)', marginOf(q.low, q.avg7)]].map(([k, val]) => `<div><div class="k">${k}</div><div class="v">${fmtEur(val)}</div></div>`).join('')}</div>`; };
+  const ct = state.ct.map?.byCardmarket?.[id];
+  body.innerHTML = `
+    <button type="button" class="btn detail-close" id="detail-close">✕</button>
+    <div class="detail-head">
+      ${t?.image ? `<img src="${t.image}/high.webp" alt="" loading="lazy">` : ''}
+      <div>
+        <h2>${nameHtml(name)}</h2>
+        <div class="exp">${escapeHtml(expLabel(exp))}${t?.number ? ` · #${escapeHtml(t.number)}` : ''}${t?.tcgId ? ` · ${escapeHtml(t.tcgId)}` : ''}</div>
+        ${d ? `<p>${freshHtml(d)} ${d.plausible ? '' : `<span class="badge warn" title="${escapeHtml(d.reasons.join('; '))}">onwaarschijnlijk</span>`}</p>` : ''}
+        <div class="detail-actions">
+          ${linksHtml(name, exp, id)}${ct ? ` <a href="${cardtraderUrl(ct[0])}" target="_blank" rel="noopener">CardTrader ↗</a>` : ''}
+          <button type="button" class="btn" data-detail-add="${id}" data-variant="${variant}" ${watched ? 'disabled' : ''}>${watched ? 'op watchlist' : '+ watchlist'}</button>
+          <button type="button" class="btn" data-detail-inv="${id}" data-variant="${variant}">+ voorraad</button>
+        </div>
+        <p class="cond-note">${conditionNote(p[variant]?.avg7)}</p>
+        ${conditionPricesHtml(id, variant) || '<p class="cond-note">Geen VS-conditieprijzen voor deze kaart (JustTCG ververst ~500 kaarten per dag; watchlist eerst).</p>'}
+      </div>
+    </div>
+    ${metrics('n')}${metrics('h')}
+    <h3>Verloop (${variant === 'h' ? 'holo' : 'normaal'})</h3>
+    ${chartSvg(histFor(id, variant))}`;
+  $('#detail-close').addEventListener('click', () => dlg.close());
+  $('[data-detail-add]', body).addEventListener('click', (ev) => { const q = p[variant]; addToWatchlist({ id, name, exp, variant, max: suggestedBuyPrice(q?.avg7) }); ev.currentTarget.disabled = true; ev.currentTarget.textContent = 'op watchlist'; });
+  $('[data-detail-inv]', body).addEventListener('click', () => addToInventoryPrompt({ id, name, exp, variant, paid: p[variant]?.low ?? null }));
+}
+function initDetail() {
+  document.addEventListener('click', (ev) => {
+    const a = ev.target.closest('a.namelink[data-open]'); if (!a) return;
+    ev.preventDefault(); openDetail(Number(a.dataset.open), a.dataset.variant || 'n');
+  });
+  $('#detail').addEventListener('click', (ev) => { if (ev.target === ev.currentTarget) ev.currentTarget.close(); });
+  typeahead($('#global-search'), $('#global-results'), (row) => openDetail(row[0], 'n'));
+}
+
 /* ---------- live (CardTrader) ---------- */
-const LIVE_DEFAULTS = { ref: 'trend', minDisc: 20, minMargin: '', minRef: 5, minPrice: '', maxPrice: '', variant: 'both', sort: 'disc', q: '', onlyWatch: false, onlyUnmatched: false };
+const LIVE_DEFAULTS = { ref: 'avg7', minDisc: 20, minMargin: '', minRef: 5, minPrice: '', maxPrice: '', variant: 'both', sort: 'margin', q: '', onlyWatch: false, onlyUnmatched: false };
 let liveInited = false;
 async function initLiveOnce() {
   if (liveInited) return; liveInited = true;
@@ -564,18 +832,12 @@ function progress(show, done = 0, total = 0, label = '') {
 }
 async function enrich(rawList, source) {
   const out = [];
-  for (const raw of rawList) {
-    const l = normalizeListing(raw);
-    l.source = source;
-    l.cmId = state.ct.byBlueprint?.get(l.blueprintId) ?? null;
-    out.push(l);
-  }
+  for (const raw of rawList) { const l = normalizeListing(raw); l.source = source; l.cmId = state.ct.byBlueprint?.get(l.blueprintId) ?? null; out.push(l); }
   const ids = out.map((l) => l.cmId).filter((x) => x != null);
   await ensureShardsFor(ids);
   const s = state.ct.settings;
   for (const l of out) {
-    const p = l.cmId != null ? pricesFor(l.cmId, l.variant ? 'h' : 'n') : null;
-    l.cm = p;
+    l.cm = l.cmId != null ? pricesFor(l.cmId, l.variant ? 'h' : 'n') : null;
     const w = state.watchlist.find((x) => x.id === l.cmId && x.variant === (l.variant ? 'h' : 'n'));
     if (w) { l.cmName = w.name; l.cmExp = w.exp; l.watch = w; }
     else if (l.cmId != null && state.indexById) { const row = state.indexById.get(l.cmId); if (row) { l.cmName = row[1]; l.cmExp = row[2]; } }
@@ -637,7 +899,7 @@ function liveRows() {
     if (f.variant === 'h' && !l.variant) continue;
     if (f.onlyWatch && !l.watch) continue;
     if (f.onlyUnmatched && l.cm) continue;
-    const showUnmatched = f.onlyUnmatched || !state.ct.map; // zonder koppeling tonen we alles
+    const showUnmatched = f.onlyUnmatched || !state.ct.map;
     if (minPrice != null && l.price < minPrice) continue;
     if (maxPrice != null && l.price > maxPrice) continue;
     const refRaw = l.cm ? l.cm[f.ref] : null;
@@ -649,17 +911,14 @@ function liveRows() {
       if (d == null || d < minDisc) continue;
       if (minMargin != null && (margin == null || margin < minMargin)) continue;
     } else if (!showUnmatched) continue;
-    if (q) {
-      const hay = `${l.name} ${l.cmName || ''} ${l.seller.username} ${l.expansion?.name || ''} ${expLabel(l.cmExp)}`.toLowerCase();
-      if (!hay.includes(q)) continue;
-    }
+    if (q) { const hay = `${l.name} ${l.cmName || ''} ${l.seller.username} ${l.expansion?.name || ''} ${expLabel(l.cmExp)}`.toLowerCase(); if (!hay.includes(q)) continue; }
     out.push({ l, ref, refRaw, d, margin });
   }
   const sorters = {
-    disc: (a, b) => (b.d ?? -1e9) - (a.d ?? -1e9), margin: (a, b) => (b.margin ?? -1e9) - (a.margin ?? -1e9), landed: (a, b) => a.l.landed - b.l.landed,
+    margin: (a, b) => (b.margin ?? -1e9) - (a.margin ?? -1e9), disc: (a, b) => (b.d ?? -1e9) - (a.d ?? -1e9), landed: (a, b) => a.l.landed - b.l.landed,
     price: (a, b) => a.l.price - b.l.price, ref: (a, b) => (b.refRaw ?? 0) - (a.refRaw ?? 0), name: (a, b) => (a.l.cmName || a.l.name).localeCompare(b.l.cmName || b.l.name),
   };
-  out.sort(sorters[f.sort] || sorters.disc);
+  out.sort(sorters[f.sort] || sorters.margin);
   return out;
 }
 function renderLive() {
@@ -667,12 +926,13 @@ function renderLive() {
   if (!state.live.length) { tbody.replaceChildren(); $('#live-more').hidden = true; return; }
   const rows = liveRows(); const shown = rows.slice(0, state.liveVisible);
   const watched = new Set(state.watchlist.map((w) => `${w.id}:${w.variant}`));
-  $('#live-summary').textContent = `${rows.length.toLocaleString('nl-NL')} van ${state.live.length.toLocaleString('nl-NL')} aanbiedingen voldoen aan filters · landed = prijs + Zero-fee/verzending · referentie = Cardmarket ${state.liveFilters.ref} na conditie-haircut.`;
+  const s = state.ct.settings;
+  $('#live-summary').textContent = `${rows.length.toLocaleString('nl-NL')} van ${state.live.length.toLocaleString('nl-NL')} aanbiedingen voldoen aan filters (taal ${s.languages?.length ? s.languages.join('/').toUpperCase() : 'alle'}, conditie ≥ ${['PO', 'PL', 'GD/MP', 'EX/SP', 'NM', 'M'][s.minCondition] || '?'}) · landed = prijs + Zero-fee/verzending · referentie = Cardmarket ${state.liveFilters.ref} na conditie-haircut.`;
   tbody.replaceChildren(...shown.map(({ l, ref, d, margin }) => {
     const tr = document.createElement('tr'); if (l.watch && l.watch.max != null && l.price <= l.watch.max) tr.classList.add('hit');
     const key = `${l.cmId}:${l.variant ? 'h' : 'n'}`;
     tr.innerHTML = `
-      <td class="name">${nameHtml(l.cmName || l.name)}${l.variant ? '<span class="badge accent">holo</span>' : ''}${l.watch ? '<span class="badge good">watchlist</span>' : ''}${l.bundle > 1 ? `<span class="badge">×${l.bundle}</span>` : ''}<span class="set-inline">${escapeHtml(l.expansion?.name || expLabel(l.cmExp))} · ${escapeHtml((l.language || '?').toUpperCase())}</span></td>
+      <td class="name">${l.cmId != null ? nameHtml(l.cmName || l.name, l.cmId, l.variant ? 'h' : 'n') : nameHtml(l.name)}${l.variant ? '<span class="badge accent">holo</span>' : ''}${l.watch ? '<span class="badge good">watchlist</span>' : ''}${l.bundle > 1 ? `<span class="badge">×${l.bundle}</span>` : ''}<span class="set-inline">${escapeHtml(l.expansion?.name || expLabel(l.cmExp))} · ${escapeHtml((l.language || '?').toUpperCase())}</span></td>
       <td class="opt"><span class="exp">${escapeHtml(l.expansion?.name || expLabel(l.cmExp))}</span></td>
       <td>${escapeHtml(l.condition || '?')}</td>
       <td class="opt">${escapeHtml((l.language || '?').toUpperCase())}</td>
@@ -681,17 +941,16 @@ function renderLive() {
       <td class="num opt">${fmtEur(l.landed)}</td>
       <td class="num opt">${fmtEur(ref)}</td>
       <td class="num"><span class="disc${d != null && d >= 0.4 ? ' strong' : ''}">${fmtPct(d)}</span></td>
-      <td class="num">${margin == null ? '–' : `<span class="${margin > 0 ? 'pos' : 'neg'}">${fmtEur(margin)}</span>`}</td>
+      <td class="num">${marginHtml(margin)}</td>
       <td class="actions"><a href="${cardtraderUrl(l.blueprintId)}" target="_blank" rel="noopener">CardTrader ↗</a>
-        ${l.cmId != null ? `${linksHtml(l.cmName || l.name, l.cmExp)} <button type="button" data-add-cm="${l.productId}" ${watched.has(key) ? 'disabled' : ''}>${watched.has(key) ? 'op watchlist' : '+ watchlist'}</button>` : `<a href="${cardmarketUrl(l.name)}" target="_blank" rel="noopener">CM zoeken ↗</a>`}</td>`;
+        ${l.cmId != null ? `${linksHtml(l.cmName || l.name, l.cmExp, l.cmId)} <button type="button" data-add-cm="${l.productId}" ${watched.has(key) ? 'disabled' : ''}>${watched.has(key) ? 'op watchlist' : '+ watchlist'}</button>` : `<a href="${cardmarketUrl(l.name)}" target="_blank" rel="noopener">CM zoeken ↗</a>`}</td>`;
     return tr;
   }));
-  if (!shown.length) { const tr = document.createElement('tr'); tr.innerHTML = '<td colspan="11" class="empty">Geen aanbiedingen binnen de filters. Verlaag de minimale korting of referentie.</td>'; tbody.replaceChildren(tr); }
+  if (!shown.length) { const tr = document.createElement('tr'); tr.innerHTML = '<td colspan="11" class="empty">Geen aanbiedingen binnen de filters. Verlaag de minimale marge, het minimale verschil of de referentie.</td>'; tbody.replaceChildren(tr); }
   $('#live-more').hidden = rows.length <= state.liveVisible;
 }
 function runBasket() {
-  const out = $('#basket-out');
-  const s = state.ct.settings;
+  const out = $('#basket-out'); const s = state.ct.settings;
   if (!state.liveWatch.length) { out.innerHTML = '<p class="msg">Doe eerst een watchlist-check.</p>'; return; }
   const wants = []; const offers = {};
   for (const w of state.watchlist) {
@@ -712,12 +971,7 @@ function runBasket() {
   out.innerHTML = html;
 }
 
-/* ---------- timer: volgende Cardmarket-bestand + automatische melding bij nieuwe data ---------- */
-const CONDITION_FACTORS = [['NM', 1], ['SP', 0.9], ['MP', 0.75], ['PL', 0.6], ['PO', 0.4]];
-function conditionNote(avg7) {
-  if (avg7 == null) return 'Geen 7d-verkoopgemiddelde, dus geen richtprijs per conditie.';
-  return `Richtprijs per conditie: ${CONDITION_FACTORS.map(([c, f]) => `<b>${c}</b> ${fmtEur(avg7 * f)}`).join(' · ')}`;
-}
+/* ---------- timer + automatische melding bij nieuwe data ---------- */
 function nextGuideTime(createdAt) {
   const last = new Date(createdAt);
   if (Number.isNaN(last.getTime())) return null;
@@ -728,8 +982,7 @@ function nextGuideTime(createdAt) {
 function renderClock() {
   const el = $('#clock'); const created = state.meta?.sources?.guide?.createdAt;
   if (!el || !created) return;
-  const next = nextGuideTime(created);
-  const last = new Date(created);
+  const next = nextGuideTime(created); const last = new Date(created);
   const sameDay = last.toDateString() === new Date().toDateString();
   const diff = next ? next.getTime() - Date.now() : null;
   const hhmm = (d) => d.toLocaleTimeString('nl-NL', { hour: '2-digit', minute: '2-digit' });
@@ -755,21 +1008,23 @@ function renderInfo() {
   const facts = [
     ['Cardmarket price guide van', fmtDate(g.createdAt)],
     ['Dashboard gebouwd', fmtDate(m.builtAt)],
-    ['Volgende check', 'elk halfuur; nieuwe guide verschijnt ~02:48 CET'],
+    ['Historie', `${historyDays()} dag(en) (${(m.history?.tracked || 0).toLocaleString('nl-NL')} producten, max 60)`],
     ['Producten in catalogus', (m.counts.products || 0).toLocaleString('nl-NL')],
     ['Met prijsdata', (m.counts.priced || 0).toLocaleString('nl-NL')],
     [`In deals-tabel (trend ≥ ${fmtEur(m.dealsMinTrend ?? 3)})`, (m.counts.deals || 0).toLocaleString('nl-NL')],
-    ['Sets', (m.counts.expansions || 0).toLocaleString('nl-NL')],
-    ['CardTrader-koppeling', m.cardtrader ? `${(m.cardtrader.linked || 0).toLocaleString('nl-NL')} kaarten, ${m.cardtrader.cmExpansionsNamed || 0} sets benoemd, ${fmtDate(m.cardtrader.syncedAt)}` : 'niet gesynchroniseerd (secret CARDTRADER_TOKEN ontbreekt)'],
+    ['Sets (met naam)', `${(m.counts.expansions || 0).toLocaleString('nl-NL')} (${m.expansionNames?.named ?? '?'})`],
+    ['TCGdex-koppeling (nummers, afbeeldingen)', m.tcgdex ? `${(m.tcgdex.linked || 0).toLocaleString('nl-NL')} producten, ${fmtDate(m.tcgdex.syncedAt)}` : 'nog niet gesynchroniseerd'],
+    ['CardTrader-koppeling', m.cardtrader ? `${(m.cardtrader.linked || 0).toLocaleString('nl-NL')} kaarten, ${fmtDate(m.cardtrader.syncedAt)}` : 'niet gesynchroniseerd (secret CARDTRADER_TOKEN ontbreekt)'],
   ];
   $('#facts').replaceChildren(...facts.flatMap(([k, v]) => { const dt = document.createElement('dt'); dt.textContent = k; const dd = document.createElement('dd'); dd.textContent = v; return [dt, dd]; }));
-  $('#meta-line').textContent = `Pokémon · Cardmarket price guide ${fmtDate(g.createdAt)} · ${(m.counts.deals || 0).toLocaleString('nl-NL')} kaarten met trend ≥ ${fmtEur(m.dealsMinTrend ?? 3)}${m.cardtrader ? ' · CardTrader gekoppeld' : ''}`;
+  $('#meta-line').textContent = `Pokémon · Cardmarket price guide ${fmtDate(g.createdAt)} · ${(m.counts.deals || 0).toLocaleString('nl-NL')} kaarten met trend ≥ ${fmtEur(m.dealsMinTrend ?? 3)} · historie ${historyDays()} dag(en)${m.cardtrader ? ' · CardTrader gekoppeld' : ''}`;
 }
 
 /* ---------- start ---------- */
 async function main() {
-  initTabs(); initDeals(); initWatchlist();
+  initTabs(); initDeals(); initTrends(); initWatchlist(); initInventory(); initDetail();
   $('#wl-count').textContent = String(state.watchlist.length);
+  $('#inv-count').textContent = String(state.inventory.length);
   try {
     const [meta, deals, expansions] = await Promise.all([fetchJson('data/meta.json'), fetchJson('data/deals.json'), fetchJson('data/expansions.json')]);
     state.meta = meta; state.deals = deals.rows; state.meta.dealsMinTrend = deals.minTrend;
@@ -779,11 +1034,15 @@ async function main() {
     $('#deals-summary').textContent = String(e.message || e);
     return;
   }
+  ensureTcgdex().then(() => { if (state.results?.length) renderDeals(); });
   fillExpansionSelect(); renderInfo(); renderDeals();
   renderClock(); setInterval(renderClock, 30e3);
   setInterval(watchForNewData, 10 * 60e3);
   $('#refresh-now').addEventListener('click', () => location.reload());
-  if ($('#tab-watchlist').classList.contains('is-active')) renderWatchlist();
-  if ($('#tab-live').classList.contains('is-active')) initLiveOnce();
+  const active = $$('.panel').find((p) => p.classList.contains('is-active'))?.id;
+  if (active === 'tab-watchlist') renderWatchlist();
+  if (active === 'tab-inventory') renderInventory();
+  if (active === 'tab-trends') renderTrends();
+  if (active === 'tab-live') initLiveOnce();
 }
 main();
