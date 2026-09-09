@@ -55,7 +55,7 @@ async function main() {
   const oldFormat = new Set(process.env.TCGDEX_REFRESH_OLD ? Object.values(map).filter((v) => v.length < 4).map((v) => v[0]) : []);
   const skip = (id) => (known.has(id) && !oldFormat.has(id)) || (noCmMap.has(id) && Date.now() - noCmMap.get(id) < 30 * 864e5);
   let all = [];
-  try { all = await getJson(`https://api.tcgdex.net/v2/${LANG}/cards`); }
+  try { all = await getJson(`https://api.tcgdex.net/v2/${LANG}/cards`); if (!Array.isArray(all) || all.length < 1000) throw new Error(`onverwachte kaartenlijst (${Array.isArray(all) ? all.length : typeof all})`); }
   catch (err) {
     // TCGdex onbereikbaar: bestaande koppeling toch wegschrijven zodat de site nooit zonder zit.
     await mkdir(OUT_DIR, { recursive: true });

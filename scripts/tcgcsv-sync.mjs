@@ -8,9 +8,9 @@
 // Env: OUT_DIR (site/data), SITE_URL, TCGCSV_CONCURRENCY (4), TCGCSV_REFRESH_DAYS (30)
 
 import { readFile, writeFile, mkdir } from 'node:fs/promises';
-import { existsSync } from 'node:fs';
+import fs, { existsSync } from 'node:fs';
 import path from 'node:path';
-import { normName, normNumber, mapSetsByName, tcgdexReverse } from './lib/sets.mjs';
+import { normName, normNumber, mapSetsByName, tcgdexReverse, loadTcgdexSets } from './lib/sets.mjs';
 
 const OUT_DIR = process.env.OUT_DIR || 'site/data';
 const SITE_URL = (process.env.SITE_URL || '').replace(/\/$/, '');
@@ -53,10 +53,10 @@ async function main() {
   const tcgdexFile = path.join(OUT_DIR, 'tcgdex.json');
   if (!existsSync(tcgdexFile)) throw new Error(`${tcgdexFile} ontbreekt`);
   const reverse = tcgdexReverse(JSON.parse(await readFile(tcgdexFile, 'utf8')));
-  const [groupsDoc, tcgdexSets] = await Promise.all([getJson(`${BASE}/groups`), getJson('https://api.tcgdex.net/v2/en/sets')]);
+  const [groupsDoc, { sets: tcgdexSets, source }] = await Promise.all([getJson(`${BASE}/groups`), loadTcgdexSets({ outDir: OUT_DIR, siteUrl: SITE_URL, fs, path })]);
   const groups = groupsDoc.results || [];
   const setMap = mapSetsByName(groups.map((g) => ({ id: g.groupId, name: g.name })), tcgdexSets);
-  console.log(`TCGCSV: ${groups.length} groepen, ${Object.keys(setMap).length} gekoppeld aan TCGdex`);
+  console.log(`TCGCSV: ${groups.length} groepen, ${Object.keys(setMap).length} gekoppeld aan TCGdex (setlijst: ${source})`);
 
   // Productcache: alleen groepen zonder cache, of recent gewijzigd
   const cache = (await liveJson('tcgcsv-products.json')) || {};

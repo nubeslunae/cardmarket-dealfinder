@@ -11,8 +11,9 @@
 //      stop als het maandelijkse restant daaronder komt), WATCHLIST_FILE (data/watchlist.json), TOP_DEALS (1500).
 
 import { readFile, writeFile, mkdir } from 'node:fs/promises';
-import { existsSync } from 'node:fs';
+import fs, { existsSync } from 'node:fs';
 import path from 'node:path';
+import { loadTcgdexSets } from './lib/sets.mjs';
 
 const KEY = process.env.JUSTTCG_API_KEY;
 const OUT_DIR = process.env.OUT_DIR || 'site/data';
@@ -103,7 +104,7 @@ async function main() {
   let justSets = prev.justSets || null;
   if (!justSets || Object.keys(setMap).length === 0 || Math.random() < 0.05) {
     const js = await api('/sets?game=pokemon');
-    const tcgdexSets = await getJson('https://api.tcgdex.net/v2/en/sets');
+    const { sets: tcgdexSets } = await loadTcgdexSets({ outDir: OUT_DIR, siteUrl: SITE_URL, fs, path });
     if (js?.data) { justSets = js.data.map((s) => ({ id: s.id, name: s.name, cards_count: s.cards_count })); setMap = mapSets(justSets, tcgdexSets); }
   }
   console.log(`JustTCG: ${justSets?.length ?? 0} sets, ${Object.keys(setMap).length} gekoppeld aan TCGdex`);

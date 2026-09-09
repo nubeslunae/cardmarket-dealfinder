@@ -8,8 +8,9 @@
 // Env: OUT_DIR (site/data), SITE_URL, SEED (data/cmurl.json), CMURL_MAX (default 3000 per run), CMURL_CONCURRENCY (4)
 
 import { readFile, writeFile, mkdir } from 'node:fs/promises';
-import { existsSync } from 'node:fs';
+import fs, { existsSync } from 'node:fs';
 import path from 'node:path';
+import { loadTcgdexSets } from './lib/sets.mjs';
 
 const OUT_DIR = process.env.OUT_DIR || 'site/data';
 const SITE_URL = (process.env.SITE_URL || '').replace(/\/$/, '');
@@ -59,7 +60,7 @@ async function main() {
   const tcgdex = JSON.parse(await readFile(tcgdexFile, 'utf8'));
   const { map, misses } = await loadExisting();
   const missMap = new Map(misses.map((x) => [x[0], x[1]]));
-  const [tcgdexSets, ptcgSets] = await Promise.all([getJson('https://api.tcgdex.net/v2/en/sets'), getJson(SETS_JSON)]);
+  const [{ sets: tcgdexSets }, ptcgSets] = await Promise.all([loadTcgdexSets({ outDir: OUT_DIR, siteUrl: SITE_URL, fs, path }), getJson(SETS_JSON)]);
   const setMap = mapSets(tcgdexSets, ptcgSets);
   const todo = [];
   for (const [cm, [tcgId, localId]] of Object.entries(tcgdex)) {

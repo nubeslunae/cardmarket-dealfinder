@@ -13,6 +13,22 @@ export function mapSetsByName(sets, tcgdexSets) {
   return out;
 }
 
+/**
+ * TCGdex-setlijst met terugval: API → vorige versie op de live site → seed in de repo. De API valt geregeld uit
+ * (404/5xx), en zonder setlijst kunnen TCGCSV/JustTCG/productlinks niet koppelen.
+ */
+export async function loadTcgdexSets({ outDir = 'site/data', siteUrl = '', seed = 'data/tcgdex-sets.json', fs, path } = {}) {
+  const tryJson = async (fn) => { try { return await fn(); } catch { return null; } };
+  const valid = (x) => Array.isArray(x) && x.length > 50 ? x : null;
+  let sets = valid(await tryJson(async () => { const r = await fetch('https://api.tcgdex.net/v2/en/sets', { headers: { Accept: 'application/json' } }); if (!r.ok) throw new Error(String(r.status)); return r.json(); }));
+  let source = 'api';
+  if (!sets && siteUrl) { sets = valid(await tryJson(async () => { const r = await fetch(`${siteUrl.replace(/\/$/, '')}/data/tcgdex-sets.json`, { cache: 'no-store' }); if (!r.ok) throw new Error(String(r.status)); return r.json(); })); source = 'live'; }
+  if (!sets && fs && path && fs.existsSync(seed)) { sets = valid(JSON.parse(fs.readFileSync(seed, 'utf8'))); source = 'seed'; }
+  if (!sets) throw new Error('TCGdex-setlijst niet beschikbaar (API, live en seed)');
+  if (fs && path) { try { fs.mkdirSync(outDir, { recursive: true }); fs.writeFileSync(path.join(outDir, 'tcgdex-sets.json'), JSON.stringify(sets.map((s) => ({ id: s.id, name: s.name, cardCount: s.cardCount })))); } catch { /* niet fataal */ } }
+  return { sets, source };
+}
+
 /** Omgekeerde index van data/tcgdex.json: "<tcgdexSet>-<nummer>" → Cardmarket-id. */
 export function tcgdexReverse(map) {
   const out = new Map();
