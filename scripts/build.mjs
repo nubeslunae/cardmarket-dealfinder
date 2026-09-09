@@ -146,6 +146,9 @@ async function main() {
       deals: deals.length,
       expansions: expansions.length,
     },
+    // Meta van meegenomen optionele data (de stap zelf overschrijft dit als hij draait)
+    ...(carry.some(([f]) => f === 'justtcg.json') && live?.justtcg ? { justtcg: live.justtcg } : {}),
+    ...(carry.some(([f]) => f === 'cardtrader/map.json') && live?.cardtrader ? { cardtrader: live.cardtrader } : {}),
   };
   await writeJson(path.join(OUT_DIR, 'meta.json'), meta);
   console.log(JSON.stringify(meta.counts));
