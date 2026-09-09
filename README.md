@@ -24,6 +24,14 @@ Played ≤ 70 %, Poor ≤ 55 %), anders vaste percentages (90/75/60/40 %). Marge
 dag weg; wat gisteren al zo laag stond is meestal beschadigd, anderstalig of verborgen en wordt standaard
 verborgen. Verder standaard verborgen: Aziatische sets, kaarten met tegenstrijdige referenties, laagste < €1.
 
+## Tabs
+
+- **Deals**: de lijst (zie boven). **Sets**: release-kalender uit Cardmarket's catalogus (`dateAdded`, sealed
+  71–78 dagen vóór release) en herdrukrisico per kaart (`idMetacard`). **Meta**: in hoeveel toernooidecks een kaart zit
+  (Limitless, 30 dagen). **Live**: CardTrader-listings met conditie en taal. **Uitleg**.
+- Detailpaneel: afbeelding, waarde per conditie, verkoopsnelheid, versheid, herdruk, regulatiemerk/rotatie,
+  VS-marktprijs (TCGCSV) en EU/VS-spread, Cardmarket-verloop, VS-weekhistorie (na de archief-workflow), links.
+
 ## Pipeline
 
 `build.yml` draait elk halfuur, vergelijkt de ETag van de Cardmarket-bestanden met de live `meta.json` en
@@ -35,9 +43,17 @@ bouwt alleen bij wijziging (niets wordt gecommit; vorige historie en optionele d
 3b. `scripts/cmurl-sync.mjs`: exacte Cardmarket-productpagina per kaart via de doorverwijzing van
    pokemontcg.io (`prices.pokemontcg.io/cardmarket/<id>` → `Products/Singles/<Set>/<Naam>-<CODE><nr>`);
    seed `data/cmurl.json`, incrementeel (max 1.500 per run), 404's 30 dagen onthouden.
-4. `scripts/justtcg-sync.mjs` (secret `JUSTTCG_API_KEY`; alleen bij cron/dispatch): max 25 calls per dag,
+4. `scripts/tcgcsv-sync.mjs`: TCGplayer-marktprijs per kaart (VS-referentie) en setcodes (`codes.json`) via TCGCSV
+   (gratis, ~440 calls/dag).
+5. `scripts/limitless-sync.mjs` (alleen bij cron/dispatch): toernooidecklists → `play.json` (gespeeld in decks).
+6. `scripts/justtcg-sync.mjs` (secret `JUSTTCG_API_KEY`; alleen bij cron/dispatch): max 25 calls per dag,
    set-pagina's van de sets met de meeste top-deals; USD → EUR via ECB-koers (frankfurter).
-5. `scripts/cardtrader-sync.mjs` (secret `CARDTRADER_TOKEN`, optioneel): koppeling voor de Live-tab.
+7. `scripts/cardtrader-sync.mjs` (secret `CARDTRADER_TOKEN`, optioneel): koppeling voor de Live-tab.
+8. `history.yml` (wekelijks/handmatig): `scripts/tcgcsv-history.mjs` haalt weekbestanden uit het TCGCSV-archief
+   (vanaf 2024-02-08) en schrijft per kaart een VS-weekreeks (`vshist/N.json`).
+
+Optionele data van de vorige live versie wordt bij elke build meegenomen, zodat een uitval van één bron nooit een
+leeg bestand oplevert.
 
 ## Lokaal
 

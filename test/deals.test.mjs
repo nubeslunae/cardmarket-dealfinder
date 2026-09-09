@@ -3,8 +3,39 @@ import assert from 'node:assert/strict';
 import {
   variantSuffix, normalizeGuide, parseDate, joinProducts, discount,
   buildDeals, buildIndex, buildShards, buildExpansions, shardOf, hasAnyPrice, updateHistory, priorMin,
-  yesterdayLow, daysAtSameLow, shardHistory, mergeHistoryShards, saleChangeDays,
+  yesterdayLow, daysAtSameLow, shardHistory, mergeHistoryShards, saleChangeDays, buildReprintIndex, buildReleases, commonPrefix,
 } from '../scripts/lib/deals.mjs';
+
+test('buildReprintIndex en herdrukkolommen', () => {
+  const prods = [
+    { idProduct: 1, name: 'Switch', idExpansion: 10, idMetacard: 500, dateAdded: '2020-01-01 00:00:00' },
+    { idProduct: 2, name: 'Switch', idExpansion: 11, idMetacard: 500, dateAdded: '2024-06-01 00:00:00' },
+    { idProduct: 3, name: 'Uniek', idExpansion: 11, idMetacard: 501, dateAdded: '2024-06-01 00:00:00' },
+  ];
+  const g = [{ idProduct: 1, low: 1, trend: 5, avg1: 5, avg7: 5, avg30: 5 }, { idProduct: 2, low: 1, trend: 5, avg1: 5, avg7: 5, avg30: 5 }, { idProduct: 3, low: 1, trend: 5, avg1: 5, avg7: 5, avg30: 5 }];
+  const joined = joinProducts(prods, g);
+  const idx = buildReprintIndex(joined);
+  assert.equal(idx.get(500).exps.size, 2);
+  assert.equal(idx.get(500).latest, '2024-06-01');
+  const rows = buildDeals(joined, { minTrend: 1, reprints: idx });
+  assert.deepEqual(rows.find((r) => r[0] === 1).slice(23), [2, '2024-06-01']);
+  assert.deepEqual(rows.find((r) => r[0] === 3).slice(23), [1, '2024-06-01']);
+});
+
+test('buildReleases: eerste datum per set, schatting, venster', () => {
+  const now = new Date('2026-09-09T00:00:00Z');
+  const singles = [{ idExpansion: 1, dateAdded: '2026-08-19 10:00:00' }, { idExpansion: 1, dateAdded: '2026-08-20 10:00:00' }, { idExpansion: 2, dateAdded: '2017-01-01 00:00:00' }];
+  const sealed = [{ idExpansion: 3, name: 'Delta Reign Booster Box', dateAdded: '2026-08-20 10:00:00' }, { idExpansion: 2, name: 'Oude set ETB', dateAdded: '2026-08-31 00:00:00' }];
+  const r = buildReleases(singles, sealed, { windowDays: 120, now });
+  assert.deepEqual(r.map((s) => s.id), [3, 1]); // set 2 is oud (eerste product 2017)
+  assert.equal(r.find((s) => s.id === 1).estimated, '2026-09-01');   // singles +13 dagen
+  assert.equal(r.find((s) => s.id === 3).estimated, '2026-11-03');   // sealed +75 dagen
+  assert.equal(r.find((s) => s.id === 3).sealedNames[0], 'Delta Reign Booster Box');
+  const r2 = buildReleases([], [{ idExpansion: 5, name: 'Delta Reign Booster Box', dateAdded: '2026-08-20 00:00:00' }, { idExpansion: 5, name: 'Delta Reign Elite Trainer Box', dateAdded: '2026-08-21 00:00:00' }], { now });
+  assert.equal(r2[0].nameGuess, 'Delta Reign');
+  assert.equal(commonPrefix(['A']), null);
+  assert.equal(commonPrefix(['Prismatic Evolutions ETB', 'Surging Sparks ETB']), null);
+});
 
 const products = [
   { idProduct: 10, name: 'Pikachu [Thunder]', idExpansion: 100, dateAdded: '2024-03-01 10:00:00' },
@@ -63,8 +94,8 @@ test('discount', () => {
 test('buildDeals filtert op hoogste trend van normaal of holo', () => {
   const rows = buildDeals(joinProducts(products, guides), { minTrend: 10 });
   assert.deepEqual(rows.map((r) => r[0]), [10, 11]); // 10 via holo-trend 12, 11 via trend 100
-  assert.equal(rows[0].length, 23);
-  assert.deepEqual(rows[1], [11, 'Charizard ex', 100, 40, 100, 60, 95, 90, null, null, null, null, null, null, null, null, null, 0, 0, 0, 0, 0, 0]);
+  assert.equal(rows[0].length, 25);
+  assert.deepEqual(rows[1], [11, 'Charizard ex', 100, 40, 100, 60, 95, 90, null, null, null, null, null, null, null, null, null, 0, 0, 0, 0, 0, 0, 1, null]);
 });
 
 test('buildIndex bevat alle producten gesorteerd op id', () => {
@@ -133,8 +164,8 @@ test('updateHistory voegt een dag toe (laagste + 7d-gem.), lijnt uit, knipt af e
   // buildDeals neemt historiekolommen mee
   const rows = buildDeals(joined2, { minTrend: 1, history: h2 });
   const r10 = rows.find((r) => r[0] === 10);
-  assert.equal(r10.length, 23);
-  assert.deepEqual(r10.slice(19), [0, 0, 1, 1]); // avg1 bleef 4: geen verkoop gemeten over 1 dagpaar
+  assert.equal(r10.length, 25);
+  assert.deepEqual(r10.slice(19, 23), [0, 0, 1, 1]); // avg1 bleef 4: geen verkoop gemeten over 1 dagpaar
   assert.equal(r10[13], 2); // prevLow: gisteren was de laagste 2, vandaag 1
   assert.equal(r10[14], 3); // hPrevLow
   assert.equal(r10[15], 2); // yLow

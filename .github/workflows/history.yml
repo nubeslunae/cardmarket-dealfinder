@@ -1,0 +1,63 @@
+name: VS-prijshistorie (TCGCSV-archief)
+
+# Handmatig of wekelijks: haalt ontbrekende weken uit het TCGCSV-archief en herdeployt de site.
+on:
+  workflow_dispatch:
+    inputs:
+      max_files:
+        description: 'Max. archiefbestanden per run'
+        default: '40'
+  schedule:
+    - cron: '20 5 * * 1'
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+      - name: 7z aanwezig?
+        run: 7z --help | head -2
+      - name: Build data (geforceerd, neemt live data mee)
+        run: node scripts/build.mjs
+        env:
+          GAME_ID: '6'
+          SITE_URL: https://nubeslunae.github.io/cardmarket-dealfinder
+          FORCE: 'true'
+      - name: Setnamen
+        run: node scripts/cardmarket-expansions.mjs
+      - name: TCGdex
+        run: node scripts/tcgdex-sync.mjs
+        env:
+          SITE_URL: https://nubeslunae.github.io/cardmarket-dealfinder
+      - name: VS-historie uit archief
+        run: node scripts/tcgcsv-history.mjs
+        env:
+          SITE_URL: https://nubeslunae.github.io/cardmarket-dealfinder
+          VSHIST_MAX_FILES: ${{ inputs.max_files || '40' }}
+      - uses: actions/configure-pages@v5
+        with:
+          enablement: true
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: site
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4

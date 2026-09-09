@@ -43,7 +43,7 @@ export function compactEntry(card) {
   const cm = card?.pricing?.cardmarket?.idProduct;
   if (!cm || !card.id) return null;
   const img = typeof card.image === 'string' && card.image.startsWith(IMAGE_PREFIX) ? card.image.slice(IMAGE_PREFIX.length) : '';
-  return [cm, [card.id, String(card.localId ?? ''), img]];
+  return [cm, [card.id, String(card.localId ?? ''), img, card.regulationMark || '']]; // 4e element: regulatiemerk (rotatie)
 }
 
 async function main() {
@@ -51,7 +51,9 @@ async function main() {
   const known = new Set(Object.values(map).map((v) => v[0]));
   // Kaarten zonder Cardmarket-id worden onthouden en pas na 30 dagen opnieuw geprobeerd.
   const noCmMap = new Map(noCm.map((x) => [x[0], x[1]]));
-  const skip = (id) => known.has(id) || (noCmMap.has(id) && Date.now() - noCmMap.get(id) < 30 * 864e5);
+  // Entries zonder regulatiemerk-veld (oud formaat) worden opnieuw opgehaald zolang TCGDEX_REFRESH_OLD=1.
+  const oldFormat = new Set(process.env.TCGDEX_REFRESH_OLD ? Object.values(map).filter((v) => v.length < 4).map((v) => v[0]) : []);
+  const skip = (id) => (known.has(id) && !oldFormat.has(id)) || (noCmMap.has(id) && Date.now() - noCmMap.get(id) < 30 * 864e5);
   let all = [];
   try { all = await getJson(`https://api.tcgdex.net/v2/${LANG}/cards`); }
   catch (err) {

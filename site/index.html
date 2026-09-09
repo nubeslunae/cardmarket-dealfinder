@@ -23,6 +23,8 @@
     </div>
     <nav class="tabs" role="tablist">
       <button class="tab is-active" data-tab="deals" role="tab">Deals</button>
+      <button class="tab" data-tab="sets" role="tab">Sets</button>
+      <button class="tab" data-tab="meta" role="tab">Meta</button>
       <button class="tab" data-tab="live" role="tab">Live</button>
       <button class="tab" data-tab="info" role="tab">Uitleg</button>
     </nav>
@@ -107,6 +109,41 @@
         </table>
       </div>
       <div class="more"><button id="deals-more" class="btn" hidden>Toon meer</button></div>
+    </section>
+
+<!-- ================= SETS ================= -->
+    <section id="tab-sets" class="panel">
+      <p class="hint">Uit Cardmarket's eigen catalogus: sealed producten verschijnen 71–78 dagen vóór de release, singles ~13 dagen. Zo zie je wat eraan komt voordat prijs-API's de set kennen.</p>
+      <p class="summary" id="sets-summary"></p>
+      <div class="table-wrap">
+        <table class="grid compact" id="sets-table">
+          <thead><tr><th>Set</th><th class="opt">Eerste product</th><th class="opt">Geschatte release</th><th class="num opt">Singles</th><th class="num opt">Sealed</th><th class="opt">Sealed-producten</th><th class="opt"></th></tr></thead>
+          <tbody></tbody>
+        </table>
+      </div>
+      <h3>Herdrukrisico</h3>
+      <p class="hint">Cardmarket groepeert dezelfde kaart over sets (idMetacard). Hoe meer sets, hoe vaker herdrukt; een recente print drukt de prijs. Let op: dit groepeert op kaartidentiteit, niet op rarity of artwork. Zoek hieronder een kaart; het detailpaneel toont het risico ook.</p>
+      <div class="wl-add">
+        <label class="grow">Zoek kaart <input id="sets-search" type="search" placeholder="typ minstens 3 tekens" autocomplete="off"></label>
+        <ul id="sets-results" class="results" hidden></ul>
+      </div>
+    </section>
+
+    <!-- ================= META ================= -->
+    <section id="tab-meta" class="panel">
+      <p class="hint">Vraagsignaal uit competitief spel (Limitless, gratis): in hoeveel decks zit een kaart in toernooien van de laatste 30 dagen, naast de Cardmarket-prijs. Alleen Standard-legale kaarten worden gespeeld; regulatiemerk H roteert rond april 2027.</p>
+      <form class="filters slim" id="meta-filters" onsubmit="return false">
+        <label>Min. waarde € <input name="minRef" type="number" min="0" step="1" value="1" inputmode="decimal"></label>
+        <label>Sorteer <select name="sort"><option value="decks">decks ↓</option><option value="low">laagste ↑</option><option value="ref">waarde ↓</option><option value="under">% onder waarde ↓</option></select></label>
+        <label class="grow">Zoek <input name="q" type="search" placeholder="naam"></label>
+      </form>
+      <p class="summary" id="meta-summary"></p>
+      <div class="table-wrap">
+        <table class="grid compact" id="meta-table">
+          <thead><tr><th>Kaart</th><th class="num opt">Decks</th><th class="num opt">Toernooien</th><th class="num opt">Laagste</th><th class="num opt">NM-waarde</th><th class="opt">Verkoopt</th><th class="opt"></th></tr></thead>
+          <tbody></tbody>
+        </table>
+      </div>
     </section>
 
     <!-- ================= LIVE (CARDTRADER) ================= -->
@@ -214,11 +251,16 @@
           <li>Live-tab (CardTrader, gratis token): echte listings met conditie en taal, landed cost en marge per listing.</li>
         </ol>
 
+        <h2>Sets, herdrukken, rotatie en meta</h2>
+        <p><strong>Sets</strong>: release-kalender uit Cardmarket's catalogus (sealed producten verschijnen 71–78 dagen vóór release, singles ~13 dagen) en herdrukrisico per kaart via Cardmarket's kaartidentiteit (idMetacard: in hoeveel sets dezelfde kaart zit en wanneer de nieuwste print verscheen). <strong>Meta</strong>: in hoeveel toernooidecks een kaart zit (Limitless, laatste 30 dagen). In het detailpaneel: VS-marktprijs (TCGplayer via TCGCSV, omgerekend) en de EU/VS-spread als onderwaarderingssignaal binnen de EU (VS-inkoop is sinds de €3-douaneheffing van juli 2026 niet rendabel), regulatiemerk met rotatiewaarschuwing (merk H roteert rond april 2027), en waar beschikbaar de VS-prijshistorie per week.</p>
+
         <h2>Bronnen</h2>
         <ul>
           <li>Cardmarket dagbestanden (gratis, geen account): prijzen en catalogus.</li>
           <li>TCGdex (gratis, open): kaartnummers, setcodes en afbeeldingen, gekoppeld op Cardmarket-productnummer.</li>
           <li>JustTCG (gratis tier, 1.000 calls per maand, max 25 per dag gebruikt): prijzen per conditie uit de VS-markt, omgerekend met de ECB-koers.</li>
+          <li>TCGCSV (gratis, geen key): dagelijkse TCGplayer-marktprijs per kaart (VS-referentie, spread) en setcodes; archief vanaf februari 2024 voor de weekhistorie.</li>
+          <li>Limitless play-API (gratis, geen key): toernooidecklists voor het vraagsignaal.</li>
           <li>CardTrader (gratis token): live listings met conditie en taal.</li>
           <li>PriceCharting (alleen als link): prijzen per PSA-grade.</li>
         </ul>

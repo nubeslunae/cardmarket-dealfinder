@@ -14,6 +14,7 @@ export const DEALS_COLUMNS = [
   'daysAtLow', 'hDaysAtLow',   // aantal voorgaande dagen waarop de laagste al (vrijwel) dezelfde prijs had
   'saleDays', 'hSaleDays',     // dagen (laatste 30) waarop het 1-daags verkoopgemiddelde veranderde = nieuwe verkoop
   'saleDaysN', 'hSaleDaysN',   // aantal dagparen waarover dat gemeten kon worden
+  'reprints', 'lastReprint',   // aantal sets met dezelfde kaart (idMetacard) en datum van de nieuwste print
 ];
 export const HISTORY_DAYS = 60;   // vandaag + 59 voorgaande dagen
 export const HISTORY_SHARDS = 64;
@@ -55,6 +56,7 @@ export function joinProducts(products, priceGuides) {
       id: p.idProduct,
       name: p.name,
       exp: p.idExpansion ?? null,
+      meta: p.idMetacard ?? null,
       added: parseDate(p.dateAdded),
       n: [...EMPTY],
       h: [...EMPTY],
@@ -184,8 +186,62 @@ export function saleChangeDays(entry, window = 30) {
   return { days, n };
 }
 
+/** Gemeenschappelijk woord-prefix van productnamen (bv. "Delta Reign Booster Box", "Delta Reign ETB" → "Delta Reign"). */
+export function commonPrefix(names) {
+  const lists = (names || []).map((n) => String(n).split(/[\s:]+/).filter(Boolean));
+  if (lists.length < 2) return null;
+  const out = [];
+  for (let i = 0; i < lists[0].length; i += 1) {
+    const w = lists[0][i];
+    if (lists.every((l) => l[i] === w)) out.push(w); else break;
+  }
+  const guess = out.join(' ').replace(/[-–:]+$/, '').trim();
+  return guess.length >= 3 ? guess : null;
+}
+
+/** Herdruk-index uit idMetacard: per metacard de set-ids en de nieuwste dateAdded. */
+export function buildReprintIndex(joined) {
+  const map = new Map();
+  for (const p of joined) {
+    if (p.meta == null) continue;
+    const e = map.get(p.meta) || { exps: new Set(), latest: null };
+    if (p.exp != null) e.exps.add(p.exp);
+    if (p.added && (!e.latest || p.added > e.latest)) e.latest = p.added;
+    map.set(p.meta, e);
+  }
+  return map;
+}
+
+/**
+ * Release-kalender uit dateAdded van singles en sealed producten: per set de eerste datum en aantallen; sets waarvan
+ * het eerste product binnen `windowDays` verscheen. Geschatte release: singles +13 dagen, anders sealed +75 dagen.
+ */
+export function buildReleases(singles, nonsingles, { windowDays = 120, now = new Date() } = {}) {
+  const sets = new Map();
+  const touch = (exp, date, kind) => {
+    if (exp == null || !date) return;
+    const e = sets.get(exp) || { id: exp, singlesFirst: null, sealedFirst: null, singles: 0, sealed: 0, sealedNames: [] };
+    if (kind === 'single') { e.singles += 1; if (!e.singlesFirst || date < e.singlesFirst) e.singlesFirst = date; }
+    else { e.sealed += 1; if (!e.sealedFirst || date < e.sealedFirst) e.sealedFirst = date; }
+    sets.set(exp, e);
+  };
+  for (const p of singles) touch(p.idExpansion, parseDate(p.dateAdded), 'single');
+  for (const p of nonsingles) { touch(p.idExpansion, parseDate(p.dateAdded), 'sealed'); const e = sets.get(p.idExpansion); if (e && e.sealedNames.length < 6) e.sealedNames.push(p.name); }
+  const cutoff = new Date(now.getTime() - windowDays * 864e5).toISOString().slice(0, 10);
+  const out = [];
+  for (const e of sets.values()) {
+    const first = [e.singlesFirst, e.sealedFirst].filter(Boolean).sort()[0];
+    if (!first || first < cutoff) continue;
+    const base = e.singlesFirst ? new Date(e.singlesFirst) : new Date(e.sealedFirst);
+    base.setDate(base.getDate() + (e.singlesFirst ? 13 : 75));
+    out.push({ ...e, first, estimated: base.toISOString().slice(0, 10), nameGuess: commonPrefix(e.sealedNames) });
+  }
+  out.sort((a, b) => b.first.localeCompare(a.first));
+  return out;
+}
+
 /** Rijen voor de deals-tabel: alleen producten waarvan normaal óf holo trend ≥ minTrend. */
-export function buildDeals(joined, { minTrend = 3, history = null } = {}) {
+export function buildDeals(joined, { minTrend = 3, history = null, reprints = null } = {}) {
   const rows = [];
   for (const p of joined) {
     const best = Math.max(p.n[1] ?? 0, p.h[1] ?? 0);
@@ -193,11 +249,13 @@ export function buildDeals(joined, { minTrend = 3, history = null } = {}) {
     const en = history ? history.n[p.id] : null;
     const eh = history ? history.h[p.id] : null;
     const sn = saleChangeDays(en); const sh = saleChangeDays(eh);
+    const rp = reprints && p.meta != null ? reprints.get(p.meta) : null;
     rows.push([p.id, p.name, p.exp, ...p.n, ...p.h,
       en ? priorMin(en) : null, eh ? priorMin(eh) : null,
       en ? yesterdayLow(en) : null, eh ? yesterdayLow(eh) : null,
       en ? daysAtSameLow(en) : 0, eh ? daysAtSameLow(eh) : 0,
-      sn.days, sh.days, sn.n, sh.n]);
+      sn.days, sh.days, sn.n, sh.n,
+      rp ? rp.exps.size : 1, rp ? rp.latest : null]);
   }
   rows.sort((a, b) => a[0] - b[0]);
   return rows;

@@ -16,7 +16,7 @@ import { existsSync } from 'node:fs';
 import path from 'node:path';
 import {
   joinProducts, buildDeals, buildIndex, buildShards, buildExpansions, updateHistory, shardHistory, mergeHistoryShards,
-  DEALS_COLUMNS, INDEX_COLUMNS, HISTORY_DAYS, HISTORY_SHARDS,
+  buildReprintIndex, buildReleases, DEALS_COLUMNS, INDEX_COLUMNS, HISTORY_DAYS, HISTORY_SHARDS,
 } from './lib/deals.mjs';
 
 const GAME_ID = process.env.GAME_ID || '6';
@@ -24,6 +24,7 @@ const GAME_SLUGS = { 1: 'Magic', 3: 'YuGiOh', 6: 'Pokemon', 15: 'FleshAndBlood',
 const SOURCES = {
   guide: `https://downloads.s3.cardmarket.com/productCatalog/priceGuide/price_guide_${GAME_ID}.json`,
   products: `https://downloads.s3.cardmarket.com/productCatalog/productList/products_singles_${GAME_ID}.json`,
+  nonsingles: `https://downloads.s3.cardmarket.com/productCatalog/productList/products_nonsingles_${GAME_ID}.json`,
 };
 const SITE_URL = (process.env.SITE_URL || '').replace(/\/$/, '');
 const OUT_DIR = process.env.OUT_DIR || 'site/data';
@@ -92,10 +93,11 @@ async function main() {
     return;
   }
 
-  const [guideDoc, productsDoc, known] = await Promise.all([
+  const [guideDoc, productsDoc, known, nonsinglesDoc] = await Promise.all([
     loadJson(SOURCES.guide, 'GUIDE_FILE'),
     loadJson(SOURCES.products, 'PRODUCTS_FILE'),
     loadKnownExpansions(),
+    loadJson(SOURCES.nonsingles, 'NONSINGLES_FILE').catch((e) => { console.warn(`sealed-catalogus niet geladen: ${e.message}`); return { products: [] }; }),
   ]);
   if (!Array.isArray(guideDoc.priceGuides) || !Array.isArray(productsDoc.products)) {
     throw new Error('onverwachte structuur in bronbestanden');
@@ -111,7 +113,9 @@ async function main() {
     prevHistory = shards.some(Boolean) ? mergeHistoryShards(shards) : await liveJson('history.json'); // history.json = oud formaat
   }
   const history = updateHistory(prevHistory, joined, guideDate, { days: HISTORY_DAYS, minTrend: DEALS_MIN_TREND });
-  const deals = buildDeals(joined, { minTrend: DEALS_MIN_TREND, history });
+  const reprints = buildReprintIndex(joined);
+  const deals = buildDeals(joined, { minTrend: DEALS_MIN_TREND, history, reprints });
+  const releases = buildReleases(productsDoc.products, nonsinglesDoc.products || []);
   const index = buildIndex(joined);
   const shards = buildShards(joined, SHARD_COUNT);
   const expansions = buildExpansions(joined, known);
@@ -119,7 +123,7 @@ async function main() {
   // Bestanden van optionele stappen (JustTCG, CardTrader) van de vorige versie meenemen; de stappen zelf
   // overschrijven ze als ze draaien. Zonder dit verdwijnen ze bij een build waarin de stap wordt overgeslagen.
   const carry = [];
-  for (const file of ['justtcg.json', 'cardtrader/map.json', 'cmurl.json', 'cmurl-miss.json', 'tcgdex.json', 'tcgdex-nocm.json']) {
+  for (const file of ['justtcg.json', 'cardtrader/map.json', 'cmurl.json', 'cmurl-miss.json', 'tcgdex.json', 'tcgdex-nocm.json', 'tcgcsv.json', 'tcgcsv-products.json', 'codes.json', 'play.json']) {
     const prev = await liveJson(file);
     if (prev) carry.push([file, prev]);
   }
@@ -132,6 +136,7 @@ async function main() {
   await writeJson(path.join(OUT_DIR, 'deals.json'), { columns: DEALS_COLUMNS, minTrend: DEALS_MIN_TREND, rows: deals });
   await writeJson(path.join(OUT_DIR, 'index.json'), { columns: INDEX_COLUMNS, rows: index });
   await writeJson(path.join(OUT_DIR, 'expansions.json'), expansions);
+  await writeJson(path.join(OUT_DIR, 'releases.json'), { generatedAt: new Date().toISOString(), sets: releases });
   await Promise.all(shardHistory(history, HISTORY_SHARDS).map((s, i) => writeJson(path.join(OUT_DIR, 'hist', `${i}.json`), s)));
   await Promise.all(shards.map((s, i) => writeJson(path.join(OUT_DIR, 'shards', `${i}.json`), s)));
 
@@ -149,6 +154,8 @@ async function main() {
       priced: shards.reduce((n, s) => n + Object.keys(s).length, 0),
       deals: deals.length,
       expansions: expansions.length,
+      sealed: (nonsinglesDoc.products || []).length,
+      releases: releases.length,
     },
   };
   // Meta van meegenomen optionele data, afgeleid uit de bestanden zelf (de stap overschrijft dit als hij draait)
@@ -156,6 +163,8 @@ async function main() {
     if (file === 'justtcg.json') meta.justtcg = { updatedAt: data.updatedAt, cards: Object.keys(data.cards || {}).length, monthlyRemaining: data.usage?.monthlyRemaining ?? null, rate: data.rate || null, carried: true };
     if (file === 'cardtrader/map.json') meta.cardtrader = { syncedAt: data.syncedAt, linked: Object.keys(data.byCardmarket || {}).length, expansions: (data.expansions || []).length, carried: true };
     if (file === 'cmurl.json') meta.cmurl = { linked: Object.keys(data).length, carried: true };
+    if (file === 'tcgcsv.json') meta.tcgcsv = { updatedAt: data.updatedAt, cards: Object.keys(data.cards || {}).length, rate: data.rate || null, carried: true };
+    if (file === 'play.json') meta.play = { updatedAt: data.updatedAt, tournaments: data.tournaments, decks: data.decks, cards: Object.keys(data.cards || {}).length, carried: true };
   }
   await writeJson(path.join(OUT_DIR, 'meta.json'), meta);
   console.log(JSON.stringify(meta.counts));

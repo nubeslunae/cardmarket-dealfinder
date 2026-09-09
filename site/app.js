@@ -10,12 +10,14 @@ const CT_BASE = 'https://api.cardtrader.com/api/v2';
 const CT_DELAY_MS = 250;
 const TCGDEX_IMG = 'https://assets.tcgdex.net/';
 const OFFSET = { n: 3, h: 8 };
-const COL = { prevLow: { n: 13, h: 14 }, yLow: { n: 15, h: 16 }, daysAtLow: { n: 17, h: 18 }, saleDays: { n: 19, h: 20 }, saleDaysN: { n: 21, h: 22 } };
+const COL = { prevLow: { n: 13, h: 14 }, yLow: { n: 15, h: 16 }, daysAtLow: { n: 17, h: 18 }, saleDays: { n: 19, h: 20 }, saleDaysN: { n: 21, h: 22 }, reprints: 23, lastReprint: 24 };
+const ROTATING_MARKS = new Set(['H']); // roteert bij de volgende rotatie (rond april 2027); G en ouder zijn al uit Standard
 const FIXED = { NM: 1, EX: 0.9, GD: 0.75, PL: 0.6, PO: 0.4 };
 const COND_LABEL = { NM: 'Near Mint', EX: 'Excellent', GD: 'Good', PL: 'Played', PO: 'Poor' };
 
 const state = {
   meta: null, deals: [], expansions: new Map(), index: null, indexById: null, shards: new Map(), hist: new Map(), tcgdex: null, justtcg: null,
+  tcgcsv: null, play: null, releases: null, vshist: new Map(), metaFilters: loadJson('cmdf.metafilters', {}),
   filters: loadJson(LS.filters, {}), costs: loadJson(LS.costs, {}), liveFilters: loadJson(LS.liveFilters, {}), visible: PAGE_SIZE, liveVisible: PAGE_SIZE, results: [],
   ct: { token: loadRaw(LS.token), settings: { ...DEFAULT_SETTINGS, ...loadJson(LS.ctSettings, {}) }, map: null, byBlueprint: null, expansions: [], abort: false, busy: false },
   live: [],
@@ -27,6 +29,7 @@ const $$ = (s, r = document) => [...r.querySelectorAll(s)];
 const EUR = new Intl.NumberFormat('nl-NL', { style: 'currency', currency: 'EUR' });
 const fmtEur = (v) => (v == null || Number.isNaN(v) ? '–' : EUR.format(v));
 const fmtPct = (v) => (v == null || Number.isNaN(v) ? '–' : `${Math.round(v * 100)} %`);
+const fmtSigned = (v) => (v == null || Number.isNaN(v) ? '–' : `${v > 0 ? '+' : ''}${Math.round(v * 100)} %`);
 const fmtDate = (iso) => { if (!iso) return '–'; const d = new Date(iso); return Number.isNaN(d.getTime()) ? iso : d.toLocaleString('nl-NL', { dateStyle: 'medium', timeStyle: 'short' }); };
 const num = (v) => (v === '' || v == null ? null : Number(v));
 const escapeHtml = (s) => String(s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
@@ -41,7 +44,14 @@ function expLabel(expId) {
   return e.name || (e.first ? `Set ${e.id} · sinds ${e.first.slice(0, 7)}` : `Set ${e.id}`);
 }
 const gameSlug = () => state.meta?.game?.slug || 'Pokemon';
-function tcgdexOf(id) { const e = state.tcgdex?.[id]; return e ? { tcgId: e[0], number: e[1], image: e[2] ? `${TCGDEX_IMG}${e[2]}` : null } : null; }
+function tcgdexOf(id) { const e = state.tcgdex?.[id]; return e ? { tcgId: e[0], number: e[1], image: e[2] ? `${TCGDEX_IMG}${e[2]}` : null, mark: e[3] || null } : null; }
+/** VS-marktprijs (TCGplayer via TCGCSV) in EUR voor een kaart/variant, of null. */
+function usPrice(id, variant) { const c = state.tcgcsv?.cards?.[id]; const rate = state.tcgcsv?.rate?.usd_eur; const v = c?.[variant === 'h' ? 'h' : 'n']; return v != null && rate ? v * rate : null; }
+async function ensureVsHist(id) {
+  const n = id % 64; if (state.vshist.has(n)) return state.vshist.get(n);
+  try { state.vshist.set(n, await fetchJson(`data/vshist/${n}.json`)); } catch { state.vshist.set(n, null); }
+  return state.vshist.get(n);
+}
 function nameHtml(name, id, variant = 'n') {
   const { base, attacks } = splitName(name);
   const inner = `<strong>${escapeHtml(base)}</strong>${attacks.length ? ` <span class="attacks">${escapeHtml(attacks.join(' · '))}</span>` : ''}`;
@@ -99,6 +109,8 @@ function showTab(name) {
   $$('.tab').forEach((b) => b.classList.toggle('is-active', b.dataset.tab === name));
   $$('.panel').forEach((p) => p.classList.toggle('is-active', p.id === `tab-${name}`));
   if (name === 'live') initLiveOnce();
+  if (name === 'sets') renderSets();
+  if (name === 'meta') renderMeta();
   try { history.replaceState(null, '', `#${name}`); } catch { /* noop */ }
 }
 
@@ -141,8 +153,9 @@ function evaluate(row, variant) {
   } else if (low != null && prevLow != null && low <= 0.7 * prevLow) fresh = 'new';
   const saleDays = row[COL.saleDays[variant]] ?? 0; const saleDaysN = row[COL.saleDaysN[variant]] ?? 0;
   const liq = liquidity(avg1, avg7, avg30, saleDays, saleDaysN);
+  const reprints = row[COL.reprints] ?? 1; const lastReprint = row[COL.lastReprint] ?? null;
   return {
-    id: row[0], name: row[1], exp: row[2], variant, low, trend, avg1, avg7, avg30, prevLow, yLow, daysAtLow, refs, fresh, saleDays, saleDaysN, liq,
+    id: row[0], name: row[1], exp: row[2], variant, low, trend, avg1, avg7, avg30, prevLow, yLow, daysAtLow, refs, fresh, saleDays, saleDaysN, liq, reprints, lastReprint,
     sure: refs != null && low != null && low <= refs.PO, good: refs != null && low != null && low <= refs.GD, under: refs != null && low != null && low < refs.NM,
     marginMin: refs ? marginOf(refs.PO, low) : null, marginGood: refs ? marginOf(refs.GD, low) : null, marginNM: refs ? marginOf(refs.NM, low) : null,
     score: refs && low != null ? 1 - low / refs.PO : null, plausible: reasons.length === 0, reasons,
@@ -259,6 +272,70 @@ function renderDeals() {
   $('#deals-more').hidden = results.length <= state.visible;
 }
 
+/* ---------- sets (release-kalender + herdruk) ---------- */
+async function renderSets() {
+  if (!state.releases) { try { state.releases = await fetchJson('data/releases.json'); } catch { state.releases = { sets: [] }; } }
+  const sets = state.releases.sets || [];
+  const today = new Date().toISOString().slice(0, 10);
+  $('#sets-summary').textContent = `${sets.length} sets met een eerste product in de laatste 120 dagen · ${sets.filter((s) => s.estimated >= today).length} nog niet uit (geschat). Catalogus van ${fmtDate(state.meta?.sources?.products?.createdAt)}.`;
+  const tbody = $('#sets-table tbody');
+  tbody.replaceChildren(...sets.map((s) => {
+    const tr = document.createElement('tr'); const upcoming = s.estimated >= today;
+    const label = state.expansions.get(s.id)?.name || s.nameGuess || expLabel(s.id);
+    tr.innerHTML = `<td class="name"><strong>${escapeHtml(label)}</strong>${upcoming ? '<span class="badge good">komt eraan</span>' : ''}<span class="set-inline">eerste product ${s.first} · geschat ${s.estimated} · ${s.singles} singles, ${s.sealed} sealed</span></td>
+      <td class="opt">${s.first}</td><td class="opt">${s.estimated}${upcoming ? '' : ' (uit)'}</td><td class="num opt">${s.singles}</td><td class="num opt">${s.sealed}</td>
+      <td class="opt"><span class="exp">${escapeHtml((s.sealedNames || []).slice(0, 3).join(' · '))}</span></td>
+      <td class="opt"><a href="https://www.cardmarket.com/en/${gameSlug()}/Products/Singles?idExpansion=${s.id}" target="_blank" rel="noopener">Cardmarket ↗</a></td>`;
+    return tr;
+  }));
+  if (!sets.length) { const tr = document.createElement('tr'); tr.innerHTML = '<td colspan="7" class="empty">Geen recente sets gevonden.</td>'; tbody.replaceChildren(tr); }
+}
+function reprintHtml(d) {
+  if (!d || d.reprints == null) return '';
+  const recent = d.lastReprint && (Date.now() - Date.parse(d.lastReprint)) < 180 * 864e5;
+  const cls = d.reprints >= 5 || recent ? 'same' : d.reprints >= 2 ? 'lower' : 'new';
+  const txt = d.reprints <= 1 ? 'nooit herdrukt' : `in ${d.reprints} sets${d.lastReprint ? `, nieuwste ${d.lastReprint.slice(0, 7)}` : ''}`;
+  return `<span class="fresh ${cls}" title="Herdrukrisico uit Cardmarket's kaartidentiteit (idMetacard): aantal sets met dezelfde kaart en datum van de nieuwste print">${txt}${recent ? ' · recent herdrukt' : ''}</span>`;
+}
+function rotationHtml(mark) {
+  if (!mark) return '';
+  const rot = ROTATING_MARKS.has(mark);
+  return `<span class="fresh ${rot ? 'same' : 'unknown'}" title="Regulatiemerk (TCGdex). Standard = H/I/J; merk H roteert rond april 2027">merk ${escapeHtml(mark)}${rot ? ' · roteert bij volgende rotatie' : ''}</span>`;
+}
+
+/* ---------- meta (Limitless vraagsignaal) ---------- */
+const META_DEFAULTS = { minRef: 1, sort: 'decks', q: '' };
+let metaInited = false;
+async function renderMeta() {
+  if (!metaInited) { metaInited = true; bindForm($('#meta-filters'), state.metaFilters, META_DEFAULTS, () => { save('cmdf.metafilters', state.metaFilters); renderMeta(); }); }
+  if (!state.play) { try { state.play = await fetchJson('data/play.json'); } catch { state.play = { cards: {} }; } }
+  const entries = Object.entries(state.play.cards || {}).map(([id, c]) => ({ id: Number(id), ...c }));
+  await ensureShardsFor(entries.map((e) => e.id));
+  const f = state.metaFilters; const minRef = Number(f.minRef) || 0; const q = (f.q || '').toLowerCase();
+  const rows = [];
+  for (const e of entries) {
+    const row = state.deals.find((r) => r[0] === e.id) || state.indexById?.get(e.id);
+    const p = pricesFor(e.id, 'n'); if (!p || (p.avg7 ?? 0) < minRef) continue;
+    const name = row ? row[1] : e.name; const exp = row ? row[2] : null;
+    if (q && !name.toLowerCase().includes(q)) continue;
+    const d = state.deals.find((r) => r[0] === e.id); const ev = d ? evaluate(d, 'n') : null;
+    rows.push({ e, name, exp, p, ev, under: p.low != null && p.avg7 ? 1 - p.low / p.avg7 : null });
+  }
+  const sorters = { decks: (a, b) => b.e.decks - a.e.decks, low: (a, b) => (a.p.low ?? 1e9) - (b.p.low ?? 1e9), ref: (a, b) => (b.p.avg7 ?? 0) - (a.p.avg7 ?? 0), under: (a, b) => (b.under ?? -1) - (a.under ?? -1) };
+  rows.sort(sorters[f.sort] || sorters.decks);
+  const pl = state.play;
+  $('#meta-summary').textContent = pl.tournaments ? `${rows.length} gespeelde kaarten · ${pl.tournaments} toernooien, ${pl.decks} decks, laatste ${pl.window} dagen · bijgewerkt ${fmtDate(pl.updatedAt)}${pl.unmapped?.length ? ` · ${pl.unmapped.length} kaartcodes zonder Cardmarket-koppeling` : ''}` : 'Nog geen Limitless-data (komt bij de eerstvolgende dagelijkse run).';
+  const tbody = $('#meta-table tbody');
+  tbody.replaceChildren(...rows.slice(0, 300).map(({ e, name, exp, p, ev }) => {
+    const tr = document.createElement('tr');
+    tr.innerHTML = `<td class="name">${nameHtml(name, e.id, 'n')}<span class="set-inline">${escapeHtml(expLabel(exp))}</span><span class="m-stats"><b>${e.decks} decks</b> · laagste ${fmtEur(p.low)} · NM ${fmtEur(p.avg7)}${ev ? ` · ${liqHtml(ev)}` : ''} ${cardLink(name, exp, e.id)}</span></td>
+      <td class="num opt">${e.decks}</td><td class="num opt">${e.tournaments}</td><td class="num opt">${fmtEur(p.low)}</td><td class="num opt">${fmtEur(p.avg7)}</td><td class="opt">${ev ? liqHtml(ev) : ''}</td>
+      <td class="actions opt">${linksHtml(name, exp, e.id)}</td>`;
+    return tr;
+  }));
+  if (!rows.length) { const tr = document.createElement('tr'); tr.innerHTML = '<td colspan="7" class="empty">Niets gevonden.</td>'; tbody.replaceChildren(tr); }
+}
+
 /* ---------- zoeken + detail ---------- */
 function typeahead(input, ul, onPick) {
   let timer = null;
@@ -297,12 +374,21 @@ async function openDetail(id, variant = 'n') {
   const dlg = $('#detail'); const body = $('#detail-body');
   body.innerHTML = '<p class="msg">Laden…</p>';
   if (!dlg.open) dlg.showModal();
-  await Promise.all([ensureShardsFor([id]), ensureHistFor([id]), ensureTcgdex(), ensureIndex()]);
+  await Promise.all([ensureShardsFor([id]), ensureHistFor([id]), ensureTcgdex(), ensureIndex(), ensureVsHist(id)]);
   const dealRow = state.deals.find((r) => r[0] === id); const row = dealRow || state.indexById?.get(id);
   const name = row ? row[1] : `#${id}`; const exp = row ? row[2] : null; const t = tcgdexOf(id);
   const p = pricesFor(id, variant); const d = dealRow ? evaluate(dealRow, variant) : null;
   const refs = condRefs(id, variant, p?.avg7);
   const ct = state.ct.map?.byCardmarket?.[id];
+  const us = usPrice(id, variant); const spread = us != null && p?.avg7 ? p.avg7 / us - 1 : null;
+  const played = state.play?.cards?.[id];
+  const vs = state.vshist.get(id % 64)?.cards?.[id]; const vsWeeks = state.vshist.get(id % 64)?.weeks;
+  const signals = [
+    us != null ? `<div><div class="k">VS-markt (TCGplayer)</div><div class="v">${fmtEur(us)}</div></div>` : '',
+    spread != null ? `<div><div class="k">EU t.o.v. VS</div><div class="v">${fmtSigned(spread)}</div></div>` : '',
+    played ? `<div><div class="k">Gespeeld (30 d)</div><div class="v">${played.decks} decks</div></div>` : '',
+    vs && vs.some((v) => v != null) ? `<div><div class="k">VS 52w laag / hoog</div><div class="v">${fmtEur(Math.min(...vs.slice(-52).filter((v) => v != null)) * (state.tcgcsv?.rate?.usd_eur || 1))} / ${fmtEur(Math.max(...vs.slice(-52).filter((v) => v != null)) * (state.tcgcsv?.rate?.usd_eur || 1))}</div></div>` : '',
+  ].join('');
   const condTable = refs ? `<table class="facts-table"><tr><th>Conditie</th><th>Waarde</th><th>Marge bij laagste ${fmtEur(p?.low)}</th></tr>${['NM', 'EX', 'GD', 'PL', 'PO'].map((k) => `<tr><td>${COND_LABEL[k]}</td><td>${fmtEur(refs[k])}</td><td>${marginHtml(marginOf(refs[k], p?.low))}</td></tr>`).join('')}</table><p class="msg">${refs.source === 'ratio' ? 'Verhoudingen uit VS-marktdata per conditie (TCGplayer via JustTCG); NM-waarde = Cardmarket 7d-verkoopgemiddelde.' : 'Vaste verhoudingen (EX 90 %, Good 75 %, Played 60 %, Poor 40 % van NM); voor deze kaart zijn nog geen VS-conditiedata opgehaald.'}</p>` : '<p class="msg">Geen 7d-verkoopgemiddelde, dus geen waarde per conditie.</p>';
   const wants = `${cleanName(name)}${t?.number ? ` #${t.number}` : ''} · ${expLabel(exp)} · ${variant === 'h' ? 'reverse holo' : 'normaal'} · Language: English · Min. condition: Good · Buy price: ${fmtEur(suggestedBuyPrice(p?.avg7))} · Email Alarm aan`;
   body.innerHTML = `
@@ -312,14 +398,16 @@ async function openDetail(id, variant = 'n') {
       <div>
         <h2>${nameHtml(name)}</h2>
         <div class="exp">${escapeHtml(expLabel(exp))}${t?.number ? ` · #${escapeHtml(t.number)}` : ''}${variant === 'h' ? ' · holo/reverse' : ''}</div>
-        <p>${d ? `${dealBadge(d)} ${freshHtml(d)} ${liqHtml(d)}` : ''} ${d && !d.plausible ? `<span class="badge warn" title="${escapeHtml(d.reasons.join('; '))}">onwaarschijnlijk</span>` : ''}</p>
-        <div class="metrics">${[['Laagste', p?.low], ['Trend', p?.trend], ['Gem. 1d', p?.avg1], ['Gem. 7d', p?.avg7], ['Gem. 30d', p?.avg30], ['Vorige 7d laagste', d?.prevLow]].map(([k, v]) => `<div><div class="k">${k}</div><div class="v">${fmtEur(v)}</div></div>`).join('')}</div>
+        <p>${d ? `${dealBadge(d)} ${freshHtml(d)} ${liqHtml(d)} ${reprintHtml(d)}` : ''} ${rotationHtml(t?.mark)} ${d && !d.plausible ? `<span class="badge warn" title="${escapeHtml(d.reasons.join('; '))}">onwaarschijnlijk</span>` : ''}</p>
+        <div class="metrics">${[['Laagste', p?.low], ['Trend', p?.trend], ['Gem. 1d', p?.avg1], ['Gem. 7d', p?.avg7], ['Gem. 30d', p?.avg30], ['Vorige 7d laagste', d?.prevLow]].map(([k, v]) => `<div><div class="k">${k}</div><div class="v">${fmtEur(v)}</div></div>`).join('')}${signals}</div>
+        ${spread != null ? `<p class="msg">EU t.o.v. VS: ${spread < -0.2 ? 'Cardmarket ligt duidelijk onder de VS-markt (onderwaardering binnen de EU?)' : spread > 0.2 ? 'Cardmarket ligt boven de VS-markt' : 'EU en VS in lijn'}. VS-inkoop is sinds de €3-douaneheffing (juli 2026) niet rendabel; dit is alleen een waarderingssignaal.</p>` : ''}
         <div class="detail-actions">${linksHtml(name, exp, id)}${ct ? ` <a href="${cardtraderUrl(ct[0])}" target="_blank" rel="noopener">CardTrader ↗</a>` : ''} <button type="button" class="btn" id="detail-wants">Kopieer voor wants list</button></div>
         <p class="msg" id="detail-msg"></p>
       </div>
     </div>
     ${condTable}
-    <h3>Verloop</h3>${chartSvg(histFor(id, variant))}`;
+    <h3>Verloop (Cardmarket)</h3>${chartSvg(histFor(id, variant))}
+    ${vs && vsWeeks && vs.some((v) => v != null) ? `<h3>VS-markt per week (TCGplayer, USD)</h3>${chartSvg({ dates: vsWeeks, l: vs, a: [] })}` : ''}`;
   $('#detail-close').addEventListener('click', () => dlg.close());
   $('#detail-wants').addEventListener('click', async () => { try { await navigator.clipboard.writeText(wants); $('#detail-msg').textContent = `Gekopieerd: ${wants}`; } catch { $('#detail-msg').textContent = wants; } });
 }
@@ -475,6 +563,10 @@ function renderInfo() {
     ['TCGdex-koppeling (nummers, afbeeldingen)', m.tcgdex ? `${(m.tcgdex.linked || 0).toLocaleString('nl-NL')} producten` : 'nog niet'],
     ['Exacte Cardmarket-links', m.cmurl ? `${(m.cmurl.linked || 0).toLocaleString('nl-NL')} producten` : 'nog niet'],
     ['VS-conditiedata (JustTCG)', m.justtcg ? `${(m.justtcg.cards || 0).toLocaleString('nl-NL')} kaarten, ${fmtDate(m.justtcg.updatedAt)}, maandbudget over ${m.justtcg.monthlyRemaining ?? '?'}` : 'niet actief'],
+    ['VS-marktprijs (TCGCSV)', m.tcgcsv ? `${(m.tcgcsv.cards || 0).toLocaleString('nl-NL')} kaarten, ${fmtDate(m.tcgcsv.updatedAt)}` : 'nog niet'],
+    ['Gespeeld (Limitless)', m.play ? `${m.play.tournaments} toernooien, ${(m.play.cards || 0).toLocaleString('nl-NL')} kaarten, ${fmtDate(m.play.updatedAt)}` : 'nog niet'],
+    ['VS-weekhistorie (TCGCSV-archief)', m.vshist ? `${m.vshist.weeksLoaded} van ${m.vshist.weeks} weken, ${(m.vshist.cards || 0).toLocaleString('nl-NL')} kaarten` : 'nog niet (workflow "VS-prijshistorie" starten)'],
+    ['Sets in kalender / sealed producten', `${m.counts?.releases ?? '?'} / ${(m.counts?.sealed || 0).toLocaleString('nl-NL')}`],
     ['CardTrader-koppeling', m.cardtrader ? `${(m.cardtrader.linked || 0).toLocaleString('nl-NL')} kaarten` : 'niet actief (secret CARDTRADER_TOKEN ontbreekt)'],
   ];
   $('#facts').replaceChildren(...facts.flatMap(([k, v]) => { const dt = document.createElement('dt'); dt.textContent = k; const dd = document.createElement('dd'); dd.textContent = v; return [dt, dd]; }));
@@ -485,12 +577,16 @@ async function main() {
   initTabs(); initDeals(); initDetail();
   $('#refresh-now').addEventListener('click', () => location.reload());
   try {
-    const [meta, deals, expansions, justtcg, cmurl] = await Promise.all([fetchJson('data/meta.json'), fetchJson('data/deals.json'), fetchJson('data/expansions.json'), fetchJson('data/justtcg.json').catch(() => null), fetchJson('data/cmurl.json').catch(() => null)]);
-    state.meta = meta; state.deals = deals.rows; state.expansions = new Map(expansions.map((e) => [e.id, e])); state.justtcg = justtcg; state.cmurl = cmurl;
+    const [meta, deals, expansions, justtcg, cmurl, tcgcsv, play] = await Promise.all([fetchJson('data/meta.json'), fetchJson('data/deals.json'), fetchJson('data/expansions.json'), fetchJson('data/justtcg.json').catch(() => null), fetchJson('data/cmurl.json').catch(() => null), fetchJson('data/tcgcsv.json').catch(() => null), fetchJson('data/play.json').catch(() => null)]);
+    state.meta = meta; state.deals = deals.rows; state.expansions = new Map(expansions.map((e) => [e.id, e])); state.justtcg = justtcg; state.cmurl = cmurl; state.tcgcsv = tcgcsv; state.play = play;
   } catch (e) { $('#meta-line').textContent = 'Data kon niet geladen worden. Is de eerste build al gedraaid?'; $('#deals-summary').textContent = String(e.message || e); return; }
   fillExpansionSelect(); renderInfo(); renderDeals(); renderStatus();
   setInterval(renderStatus, 60e3); setInterval(watchForNewData, 10 * 60e3);
   ensureTcgdex().then(() => renderDeals());
-  if ($('#tab-live').classList.contains('is-active')) initLiveOnce();
+  typeahead($('#sets-search'), $('#sets-results'), (row) => openDetail(row[0], 'n'));
+  const active = $$('.panel').find((p) => p.classList.contains('is-active'))?.id;
+  if (active === 'tab-live') initLiveOnce();
+  if (active === 'tab-sets') renderSets();
+  if (active === 'tab-meta') renderMeta();
 }
 main();
