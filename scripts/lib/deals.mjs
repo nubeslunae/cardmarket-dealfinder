@@ -15,6 +15,7 @@ export const DEALS_COLUMNS = [
   'saleDays', 'hSaleDays',     // dagen (laatste 30) waarop het 1-daags verkoopgemiddelde veranderde = nieuwe verkoop
   'saleDaysN', 'hSaleDaysN',   // aantal dagparen waarover dat gemeten kon worden
   'reprints', 'lastReprint',   // aantal sets met dezelfde kaart (idMetacard) en datum van de nieuwste print
+  'medLow', 'hMedLow',         // mediaan van de laagste over de historie (structurele vloer; null < 5 dagen)
 ];
 export const HISTORY_DAYS = 60;   // vandaag + 59 voorgaande dagen
 export const HISTORY_SHARDS = 64;
@@ -148,6 +149,14 @@ export function priorMin(entry, window = 7) {
   return prev.length ? Math.min(...prev) : null;
 }
 
+/** Mediaan van de laagste over de hele historie (min. `min` dagen), null anders. Structurele vloer vs. dagprijs. */
+export function medianLow(entry, min = 5) {
+  const v = lows(entry).filter((x) => x != null && Number.isFinite(x)).sort((a, b) => a - b);
+  if (v.length < min) return null;
+  const m = Math.floor(v.length / 2);
+  return Math.round((v.length % 2 ? v[m] : (v[m - 1] + v[m]) / 2) * 100) / 100;
+}
+
 /** "Laagste" van gisteren (de dag vóór de laatste), null zonder historie. */
 export function yesterdayLow(entry) {
   const arr = lows(entry);
@@ -255,7 +264,8 @@ export function buildDeals(joined, { minTrend = 3, history = null, reprints = nu
       en ? yesterdayLow(en) : null, eh ? yesterdayLow(eh) : null,
       en ? daysAtSameLow(en) : 0, eh ? daysAtSameLow(eh) : 0,
       sn.days, sh.days, sn.n, sh.n,
-      rp ? rp.exps.size : 1, rp ? rp.latest : null]);
+      rp ? rp.exps.size : 1, rp ? rp.latest : null,
+      en ? medianLow(en) : null, eh ? medianLow(eh) : null]);
   }
   rows.sort((a, b) => a[0] - b[0]);
   return rows;
@@ -279,18 +289,23 @@ export function buildShards(joined, shardCount = 64) {
   return shards;
 }
 
-/** Per set: aantal producten, datum van het eerst toegevoegde product, naam als bekend. */
-export function buildExpansions(joined, known = {}) {
+/**
+ * Per set: aantal producten, datum van het eerst toegevoegde product, naam als bekend, aantal producten met
+ * TCGdex-koppeling (`linked`, Engelse kaarten) en taalklasse (`lang`, zie classifySetLanguage).
+ */
+export function buildExpansions(joined, known = {}, { linkedIds = null, classify = null } = {}) {
   const map = new Map();
   for (const p of joined) {
     if (p.exp == null) continue;
     let e = map.get(p.exp);
     if (!e) {
-      e = { id: p.exp, name: known[p.exp] ?? null, count: 0, first: null };
+      e = { id: p.exp, name: known[p.exp] ?? null, count: 0, first: null, linked: 0 };
       map.set(p.exp, e);
     }
     e.count += 1;
+    if (linkedIds && linkedIds.has(p.id)) e.linked += 1;
     if (p.added && (!e.first || p.added < e.first)) e.first = p.added;
   }
+  if (classify) for (const e of map.values()) e.lang = classify(e);
   return [...map.values()].sort((a, b) => (b.first ?? '').localeCompare(a.first ?? '') || a.id - b.id);
 }

@@ -373,3 +373,9 @@ dialog.detail::backdrop { background: rgba(0,0,0,0.45); }
   .sub { font-size: 11.5px; line-height: 1.3; }
   .tabs { order: 4; }
 }
+
+/* rarity- en taalsignalen */
+.badge.rar { background: #eee6d8; color: #4a3b22; font-weight: 700; letter-spacing: .02em; }
+.check-list { margin: .4rem 0 .2rem; padding-left: 1.2rem; }
+.check-list li { margin: .2rem 0; }
+.check-list li.warn { color: #9a3412; }

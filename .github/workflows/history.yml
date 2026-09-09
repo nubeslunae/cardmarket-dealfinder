@@ -45,6 +45,8 @@ jobs:
         run: node scripts/tcgcsv-sync.mjs
         env:
           SITE_URL: https://nubeslunae.github.io/cardmarket-dealfinder
+      - name: Rarity-laag
+        run: node scripts/rarity-sync.mjs
       - name: VS-historie uit archief
         run: node scripts/tcgcsv-history.mjs
         env:

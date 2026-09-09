@@ -63,10 +63,26 @@
         <label>Set
           <select name="exp"><option value="">alle sets</option></select>
         </label>
+        <label>Rarity
+          <select name="rarity" title="Rarity-klasse uit TCGdex/TCGCSV/CardTrader; Z = nummer boven de setgrootte zonder bekende rarity">
+            <option value="">alle</option>
+            <option value="S">Special Illustration Rare</option>
+            <option value="I">Illustration Rare</option>
+            <option value="H">Hyper / Secret / Gold</option>
+            <option value="U">Ultra Rare (full art, VMAX, VSTAR)</option>
+            <option value="A">ACE SPEC / Shiny / Amazing</option>
+            <option value="D">Double Rare (ex, V)</option>
+            <option value="R">Rare / Holo</option>
+            <option value="C">Common / Uncommon</option>
+            <option value="P">Promo</option>
+            <option value="Z">Secret-tier, rarity onbekend</option>
+          </select>
+        </label>
         <label>Sorteer
           <select name="sort">
             <option value="marginMin">marge (zelfs als Poor) ↓</option>
             <option value="marginGood">marge (als Good+) ↓</option>
+            <option value="rarity">top per rarity</option>
             <option value="score">% onder Poor-waarde ↓</option>
             <option value="low">laagste ↑</option>
             <option value="ref">waarde ↓</option>
@@ -76,7 +92,8 @@
           <input name="q" type="search" placeholder="naam of set-id">
         </label>
         <label class="check" title="Een echt koopje is binnen een dag weg. Wat gisteren al zo laag stond is meestal beschadigd, anderstalig of verborgen."><input name="hideStale" type="checkbox" checked> verberg wat gisteren al zo laag stond</label>
-        <label class="check" title="Verbergt Aziatische sets en kaarten met tegenstrijdige referenties of een laagste onder €1."><input name="plausibleOnly" type="checkbox" checked> verberg onwaarschijnlijke</label>
+        <label class="check" title="Verbergt sets die waarschijnlijk niet Engels zijn (Japanse sets onder Engelse naam) en kaarten met tegenstrijdige referenties of een laagste onder €1."><input name="plausibleOnly" type="checkbox" checked> verberg onwaarschijnlijke</label>
+        <label class="check" title="De Cardmarket-laagste geldt voor élke taal en conditie, ook playsets. Verbergt kaarten waarvan de laagste waarschijnlijk niet Engels, niet Good+ of niet los is: onder de CardTrader Engels-Good+-ondergrens, al dagen ver onder de Good-waarde, of ≈ ¼ van de vorige laagste (playset)."><input name="hideSuspect" type="checkbox" checked> verberg waarschijnlijk niet-Engels/Good+</label>
         <label class="check" title="Verbergt kaarten met maar één verkoop in 30 dagen (alle verkoopgemiddelden gelijk) of, met historie, verkopen op minder dan een kwart van de dagen."><input name="hideSlow" type="checkbox" checked> verberg traag verkopende</label>
         <label class="check" title="Alleen kaarten waarvoor echte conditie-verhoudingen uit de VS-markt (JustTCG) beschikbaar zijn"><input name="onlyRatio" type="checkbox"> alleen met VS-conditiedata</label>
         <button type="button" class="btn" id="filters-reset">Reset</button>
@@ -94,7 +111,8 @@
           <thead>
             <tr>
               <th data-sort="low">Kaart</th>
-              <th class="num opt" data-sort="low" title="Goedkoopste listing vandaag, élke conditie en taal">Laagste</th>
+              <th class="num opt" data-sort="low" title="Goedkoopste listing vandaag op Cardmarket, élke conditie en taal, per stuk (ook playsets)">Laagste</th>
+              <th class="num opt" title="Goedkoopste Engelse aanbieding in conditie Good/Moderately Played of beter op CardTrader (losse kaart, niet graded); meetlat voor de Cardmarket-laagste">CT EN</th>
               <th class="opt" title="Versheid t.o.v. gisteren">Sinds</th>
               <th class="opt" title="Verkoopsnelheid: dagen met een nieuwe verkoop (uit het 1-daags verkoopgemiddelde); '1 verkoop in 30 dagen' als alle gemiddelden gelijk zijn">Verkoopt</th>
               <th class="num opt" data-sort="ref" title="Waarde in Near Mint (Cardmarket 7d-verkoopgemiddelde)">NM</th>
@@ -237,6 +255,14 @@
         <p><strong>Sinds</strong> (versheid) komt uit de dagelijkse historie: een echt koopje is binnen een dag weg. Wat gisteren al zo laag stond is meestal beschadigd, anderstalig of verborgen, en wordt standaard verborgen.</p>
         <p><strong>Verkoopt</strong> (verkoopsnelheid): Cardmarket geeft geen verkoopaantallen, maar het 1-daags verkoopgemiddelde wordt doorgeschoven zolang er geen nieuwe verkoop is. Zijn 1d-, 7d- en 30d-gemiddelde exact gelijk, dan was er in 30 dagen precies één verkoop ("traag", standaard verborgen). Met historie tellen we op hoeveel dagen het 1d-gemiddelde veranderde: dat is een ondergrens van het aantal verkoopdagen (verkopen tegen exact dezelfde prijs worden gemist). Vanaf ~5 dagen historie verschijnt "verkocht op X van Y dagen"; ≥ 60 % = snel, ≥ 25 % = normaal, daaronder traag.</p>
 
+        <h2>Taal, conditie en playsets: waarom "laagste" niet de Engelse prijs is</h2>
+        <p>Cardmarket's dagbestand geeft per kaart één "laagste": de goedkoopste aanbieding in <em>elke</em> taal (Engels, Frans, Duits, Spaans, Italiaans, Portugees), <em>elke</em> conditie tot en met Poor, en per stuk, ook als het een playset van vier is. Welke van die drie het is, staat er niet bij. Daarom werkt het dashboard met twee prijzen: <strong>Laagste</strong> (wat Cardmarket laat zien) en de <strong>Good-waarde</strong> (wat een Engels exemplaar in Good redelijkerwijs waard is); de marges rekenen met de waarde, niet met de laagste.</p>
+        <p>Drie signalen zeggen wanneer de laagste waarschijnlijk niet Engels, niet Good+ of niet los is (label <span class="badge warn">taal?</span>, standaard verborgen): (1) ze ligt onder 60 % van de <strong>CardTrader Engels-Good+-ondergrens</strong> (kolom "CT EN": de goedkoopste losse Engelse aanbieding in Moderately Played of beter op CardTrader, dagelijks via de officiële API); (2) ze staat al drie dagen of langer ver onder de Good-waarde (een exemplaar dat niemand koopt is meestal anderstalig of beschadigd); (3) ze is ongeveer een kwart van de vorige laagste (playset per stuk). Een laagste die nieuw is én ver onder de 60-dagen-mediaan ligt, krijgt juist het label "kans": foutlisting of echt koopje, snel kijken.</p>
+        <p>Sets die Cardmarket onder een Engelse naam voert maar Japans zijn ("Mysterious Mountains", "VMAX Climax", …) worden herkend aan de Engelse setlijsten en de koppelingsgraad en vallen onder "verberg onwaarschijnlijke". Cardmarket zelf filtert alleen de aanbiedingenlijst op taal en conditie (de links doen dat al: Engels, Good+); de "Vanaf"-prijs op de site is dezelfde ongefilterde prijs als hier.</p>
+
+        <h2>Rarity</h2>
+        <p>Rarity komt uit TCGdex, TCGCSV en CardTrader (in die volgorde) en wordt teruggebracht tot klassen: Special Illustration Rare, Illustration Rare, Hyper/Secret/Gold, Ultra Rare, ACE/Shiny/Amazing, Double Rare (ex, V), Rare/Holo, Common/Uncommon, Promo. Zonder bron geldt de nummer-proxy: nummer boven de officiële setgrootte = secret-tier (Z). Filter op een klasse, of sorteer op "top per rarity" (de beste kaart van elke klasse eerst). In het detail: de rarity, een link naar alle kaarten van die rarity in de set op Cardmarket (gesorteerd op prijs) en de uitschieterscore binnen set + rarity.</p>
+
         <h2>Waarom vind ik een lage "laagste" niet terug?</h2>
         <ol>
           <li>De productpagina toont dezelfde "From"-prijs maar geen listing: verborgen verkoper (vakantie, verzendt niet naar NL, of je taalfilter). Zet "Language", "Seller location" en "Min. condition" op alles.</li>
@@ -261,7 +287,7 @@
           <li>JustTCG (gratis tier, 1.000 calls per maand, max 25 per dag gebruikt): prijzen per conditie uit de VS-markt, omgerekend met de ECB-koers.</li>
           <li>TCGCSV (gratis, geen key): dagelijkse TCGplayer-marktprijs per kaart (VS-referentie, spread) en setcodes; archief vanaf februari 2024 voor de weekhistorie.</li>
           <li>Limitless play-API (gratis, geen key): toernooidecklists voor het vraagsignaal.</li>
-          <li>CardTrader (gratis token): live listings met conditie en taal.</li>
+          <li>CardTrader (gratis token): dagelijkse Engels-Good+-ondergrens per kaart (officiële API, max 60 sets per run) en live listings met conditie en taal.</li>
           <li>PriceCharting (alleen als link): prijzen per PSA-grade.</li>
         </ul>
         <dl class="facts" id="facts"></dl>
