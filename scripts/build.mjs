@@ -119,7 +119,7 @@ async function main() {
   // Bestanden van optionele stappen (JustTCG, CardTrader) van de vorige versie meenemen; de stappen zelf
   // overschrijven ze als ze draaien. Zonder dit verdwijnen ze bij een build waarin de stap wordt overgeslagen.
   const carry = [];
-  for (const file of ['justtcg.json', 'cardtrader/map.json']) {
+  for (const file of ['justtcg.json', 'cardtrader/map.json', 'cmurl.json', 'cmurl-miss.json', 'tcgdex-nocm.json']) {
     const prev = await liveJson(file);
     if (prev) carry.push([file, prev]);
   }

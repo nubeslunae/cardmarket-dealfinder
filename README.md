@@ -32,6 +32,9 @@ bouwt alleen bij wijziging (niets wordt gecommit; vorige historie en optionele d
 1. `scripts/build.mjs`: deals, index, prijs-shards, historie, setnamen (seed `data/expansions.json`).
 2. `scripts/cardmarket-expansions.mjs`: nieuwe setnamen uit Cardmarket's keuzelijst via het Internet Archive.
 3. `scripts/tcgdex-sync.mjs`: kaartnummers, setcodes en afbeeldingen (seed `data/tcgdex.json`, ~19k producten).
+3b. `scripts/cmurl-sync.mjs`: exacte Cardmarket-productpagina per kaart via de doorverwijzing van
+   pokemontcg.io (`prices.pokemontcg.io/cardmarket/<id>` → `Products/Singles/<Set>/<Naam>-<CODE><nr>`);
+   seed `data/cmurl.json`, incrementeel (max 1.500 per run), 404's 30 dagen onthouden.
 4. `scripts/justtcg-sync.mjs` (secret `JUSTTCG_API_KEY`; alleen bij cron/dispatch): max 25 calls per dag,
    set-pagina's van de sets met de meeste top-deals; USD → EUR via ECB-koers (frankfurter).
 5. `scripts/cardtrader-sync.mjs` (secret `CARDTRADER_TOKEN`, optioneel): koppeling voor de Live-tab.
@@ -49,6 +52,7 @@ npm run serve                                # http://localhost:8080
 - Cardmarket-data is dagelijks; conditie en taal per listing bestaan alleen op de Live-tab (CardTrader) en
   in je Cardmarket wants list (Min. condition + Language + Email Alarm; het detailpaneel kopieert de regel).
 - VS-conditiedata groeit met ~500 kaarten per dag; kaarten zonder krijgen vaste verhoudingen.
-- Cardmarket-links: `Cards/<slug>` (exacte kaart) en `Products/Singles?idExpansion=&searchString=`.
+- Cardmarket-links: "Cardmarket ↗" = exacte productpagina (waar bekend, anders de set-gefilterde lijst),
+  "Alle versies ↗" = `Cards/<slug>`.
 - GitHub schakelt cron-workflows uit na 60 dagen zonder repo-activiteit; opnieuw inschakelen via Actions.
 - Publieke repo (vereist voor gratis Pages); er staat geen persoonlijke data in.

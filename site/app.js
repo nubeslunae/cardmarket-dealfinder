@@ -47,9 +47,16 @@ function nameHtml(name, id, variant = 'n') {
   const inner = `<strong>${escapeHtml(base)}</strong>${attacks.length ? ` <span class="attacks">${escapeHtml(attacks.join(' · '))}</span>` : ''}`;
   return id != null ? `<a class="namelink" data-open="${id}" data-variant="${variant}">${inner}</a>` : inner;
 }
+/** Exacte Cardmarket-productpagina (via data/cmurl.json) of null. */
+function productUrl(id) { const p = state.cmurl?.[id]; return p ? `https://www.cardmarket.com/en/${gameSlug()}/Products/Singles/${p}` : null; }
+/** De beste link naar de kaart zelf: exacte productpagina als bekend, anders de set-gefilterde lijst. */
+function cardLink(name, exp, id) {
+  const exact = id != null ? productUrl(id) : null;
+  return exact ? `<a href="${exact}" target="_blank" rel="noopener" title="Exacte productpagina op Cardmarket">Cardmarket ↗</a>` : `<a href="${cardmarketSetUrl(gameSlug(), name, exp)}" target="_blank" rel="noopener" title="Deze uitvoering binnen de set (exacte link nog niet bekend)">Cardmarket (set) ↗</a>`;
+}
 function linksHtml(name, exp, id) {
   const t = id != null ? tcgdexOf(id) : null;
-  return `<a href="${cardmarketCardUrl(gameSlug(), name)}" target="_blank" rel="noopener" title="Exacte kaart op Cardmarket">Kaart ↗</a> <a href="${cardmarketSetUrl(gameSlug(), name, exp)}" target="_blank" rel="noopener" title="Deze uitvoering binnen de set">In set ↗</a> <a href="${pricechartingUrl(t?.number ? `${splitName(name).base} ${t.number}` : name, expLabel(exp))}" target="_blank" rel="noopener" title="PriceCharting: prijzen per PSA-grade (USD)">PSA ↗</a>`;
+  return `${cardLink(name, exp, id)} <a href="${cardmarketCardUrl(gameSlug(), name)}" target="_blank" rel="noopener" title="Alle uitvoeringen van deze kaart op Cardmarket">Alle versies ↗</a> <a href="${pricechartingUrl(t?.number ? `${splitName(name).base} ${t.number}` : name, expLabel(exp))}" target="_blank" rel="noopener" title="PriceCharting: prijzen per PSA-grade (USD)">PSA ↗</a>`;
 }
 async function fetchJson(path) { const r = await fetch(path, { cache: 'no-cache' }); if (!r.ok) throw new Error(`${path}: ${r.status}`); return r.json(); }
 async function ensureShardsFor(ids) {
@@ -217,7 +224,7 @@ function renderDeals() {
     tr.innerHTML = `
       <td class="name">${nameHtml(d.name, d.id, d.variant)}${d.variant === 'h' ? '<span class="badge accent">holo</span>' : ''}${dealBadge(d)}${d.refs.source === 'ratio' ? '<span class="badge" title="Conditieverhoudingen uit VS-marktdata">VS</span>' : ''}${d.fresh === 'new' ? '<span class="badge good">nieuw laag</span>' : ''}
         <span class="set-inline">${escapeHtml(expLabel(d.exp))}</span>
-        <span class="m-stats"><b>${fmtEur(d.low)}</b> · NM ${fmtEur(d.refs.NM)} · Poor ${fmtEur(d.refs.PO)} · marge min. ${marginHtml(d.marginMin)}</span></td>
+        <span class="m-stats"><b>${fmtEur(d.low)}</b> · NM ${fmtEur(d.refs.NM)} · Poor ${fmtEur(d.refs.PO)} · marge min. ${marginHtml(d.marginMin)} ${cardLink(d.name, d.exp, d.id)}</span></td>
       <td class="num opt">${fmtEur(d.low)}</td>
       <td class="opt">${freshHtml(d)}</td>
       <td class="num opt">${fmtEur(d.refs.NM)}</td>
@@ -446,6 +453,7 @@ function renderInfo() {
     ['Historie', `${historyDays()} dag(en), max 60`], ['Producten', (m.counts?.products || 0).toLocaleString('nl-NL')],
     ['Sets met naam', `${m.expansionNames?.named ?? '?'} van ${m.counts?.expansions ?? '?'}`],
     ['TCGdex-koppeling (nummers, afbeeldingen)', m.tcgdex ? `${(m.tcgdex.linked || 0).toLocaleString('nl-NL')} producten` : 'nog niet'],
+    ['Exacte Cardmarket-links', m.cmurl ? `${(m.cmurl.linked || 0).toLocaleString('nl-NL')} producten` : 'nog niet'],
     ['VS-conditiedata (JustTCG)', m.justtcg ? `${(m.justtcg.cards || 0).toLocaleString('nl-NL')} kaarten, ${fmtDate(m.justtcg.updatedAt)}, maandbudget over ${m.justtcg.monthlyRemaining ?? '?'}` : 'niet actief'],
     ['CardTrader-koppeling', m.cardtrader ? `${(m.cardtrader.linked || 0).toLocaleString('nl-NL')} kaarten` : 'niet actief (secret CARDTRADER_TOKEN ontbreekt)'],
   ];
@@ -457,8 +465,8 @@ async function main() {
   initTabs(); initDeals(); initDetail();
   $('#refresh-now').addEventListener('click', () => location.reload());
   try {
-    const [meta, deals, expansions, justtcg] = await Promise.all([fetchJson('data/meta.json'), fetchJson('data/deals.json'), fetchJson('data/expansions.json'), fetchJson('data/justtcg.json').catch(() => null)]);
-    state.meta = meta; state.deals = deals.rows; state.expansions = new Map(expansions.map((e) => [e.id, e])); state.justtcg = justtcg;
+    const [meta, deals, expansions, justtcg, cmurl] = await Promise.all([fetchJson('data/meta.json'), fetchJson('data/deals.json'), fetchJson('data/expansions.json'), fetchJson('data/justtcg.json').catch(() => null), fetchJson('data/cmurl.json').catch(() => null)]);
+    state.meta = meta; state.deals = deals.rows; state.expansions = new Map(expansions.map((e) => [e.id, e])); state.justtcg = justtcg; state.cmurl = cmurl;
   } catch (e) { $('#meta-line').textContent = 'Data kon niet geladen worden. Is de eerste build al gedraaid?'; $('#deals-summary').textContent = String(e.message || e); return; }
   fillExpansionSelect(); renderInfo(); renderDeals(); renderStatus();
   setInterval(renderStatus, 60e3); setInterval(watchForNewData, 10 * 60e3);
