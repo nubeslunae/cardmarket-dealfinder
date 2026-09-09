@@ -17,7 +17,7 @@ export const DEFAULT_SETTINGS = Object.freeze({
   sellerShippingDefault: 2.0,// schatting per niet-hub-verkoper zonder opgevraagde staffel
   expectedBasketSize: 5,     // over hoeveel kaarten de hub-verzending omgeslagen wordt
   sellCommissionPct: 5,      // verkoperscommissie bij doorverkoop tegen trend
-  minCondition: 3,           // Slightly Played of beter
+  minCondition: 2,           // Good / Moderately Played of beter (Cardmarket "Good" ≈ CardTrader "Moderately Played")
   languages: ['en'],         // standaard alleen Engels; lege lijst = alle talen
   countries: [],             // lege lijst = alle landen
   hubOnly: false,

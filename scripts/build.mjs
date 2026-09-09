@@ -15,8 +15,8 @@ import { readFile, writeFile, mkdir, rm, appendFile } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import path from 'node:path';
 import {
-  joinProducts, buildDeals, buildIndex, buildShards, buildExpansions, updateHistory,
-  DEALS_COLUMNS, INDEX_COLUMNS, HISTORY_DAYS,
+  joinProducts, buildDeals, buildIndex, buildShards, buildExpansions, updateHistory, shardHistory, mergeHistoryShards,
+  DEALS_COLUMNS, INDEX_COLUMNS, HISTORY_DAYS, HISTORY_SHARDS,
 } from './lib/deals.mjs';
 
 const GAME_ID = process.env.GAME_ID || '6';
@@ -104,9 +104,12 @@ async function main() {
   const joined = joinProducts(productsDoc.products, guideDoc.priceGuides);
   // Historie van "laagste": de vorige versie staat op de live site; zelfde guide-datum voegt niets toe.
   const guideDate = String(guideDoc.createdAt || new Date().toISOString()).slice(0, 10);
-  const prevHistory = process.env.HISTORY_FILE && existsSync(process.env.HISTORY_FILE)
-    ? JSON.parse(await readFile(process.env.HISTORY_FILE, 'utf8'))
-    : await liveJson('history.json');
+  let prevHistory = null;
+  if (process.env.HISTORY_FILE && existsSync(process.env.HISTORY_FILE)) prevHistory = JSON.parse(await readFile(process.env.HISTORY_FILE, 'utf8'));
+  else {
+    const shards = await Promise.all(Array.from({ length: HISTORY_SHARDS }, (_, i) => liveJson(`hist/${i}.json`)));
+    prevHistory = shards.some(Boolean) ? mergeHistoryShards(shards) : await liveJson('history.json'); // history.json = oud formaat
+  }
   const history = updateHistory(prevHistory, joined, guideDate, { days: HISTORY_DAYS, minTrend: DEALS_MIN_TREND });
   const deals = buildDeals(joined, { minTrend: DEALS_MIN_TREND, history });
   const index = buildIndex(joined);
@@ -117,14 +120,14 @@ async function main() {
   await writeJson(path.join(OUT_DIR, 'deals.json'), { columns: DEALS_COLUMNS, minTrend: DEALS_MIN_TREND, rows: deals });
   await writeJson(path.join(OUT_DIR, 'index.json'), { columns: INDEX_COLUMNS, rows: index });
   await writeJson(path.join(OUT_DIR, 'expansions.json'), expansions);
-  await writeJson(path.join(OUT_DIR, 'history.json'), history);
+  await Promise.all(shardHistory(history, HISTORY_SHARDS).map((s, i) => writeJson(path.join(OUT_DIR, 'hist', `${i}.json`), s)));
   await Promise.all(shards.map((s, i) => writeJson(path.join(OUT_DIR, 'shards', `${i}.json`), s)));
 
   const meta = {
     game: { id: Number(GAME_ID), slug: GAME_SLUGS[GAME_ID] || 'Pokemon' },
     builtAt: new Date().toISOString(),
     shardCount: SHARD_COUNT,
-    history: { dates: history.dates, tracked: Object.keys(history.n).length },
+    history: { dates: history.dates, tracked: Object.keys(history.n).length, shards: HISTORY_SHARDS },
     sources: {
       guide: { ...remote.guide, createdAt: guideDoc.createdAt ?? null, url: SOURCES.guide },
       products: { ...remote.products, createdAt: productsDoc.createdAt ?? null, url: SOURCES.products },

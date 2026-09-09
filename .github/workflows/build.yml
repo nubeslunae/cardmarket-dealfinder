@@ -45,6 +45,17 @@ jobs:
       - name: Setnamen aanvullen uit Cardmarket-keuzelijst (via Internet Archive, faalt zacht)
         if: steps.build.outputs.changed == 'true'
         run: node scripts/cardmarket-expansions.mjs
+      - name: TCGdex-koppeling (kaartnummers, afbeeldingen; incrementeel, faalt zacht)
+        if: steps.build.outputs.changed == 'true'
+        run: node scripts/tcgdex-sync.mjs
+        env:
+          SITE_URL: https://nubeslunae.github.io/cardmarket-dealfinder
+      - name: JustTCG conditie-prijzen (optioneel, alleen met secret; max 25 calls/run)
+        if: steps.build.outputs.changed == 'true'
+        run: node scripts/justtcg-sync.mjs
+        env:
+          SITE_URL: https://nubeslunae.github.io/cardmarket-dealfinder
+          JUSTTCG_API_KEY: ${{ secrets.JUSTTCG_API_KEY }}
       - name: CardTrader-koppeling (optioneel, alleen met secret)
         if: steps.build.outputs.changed == 'true'
         run: node scripts/cardtrader-sync.mjs

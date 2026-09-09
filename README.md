@@ -28,6 +28,20 @@ Cardmarket-account gekoppeld.
    `localStorage`. De Live-tab praat rechtstreeks met `api.cardtrader.com` (de API stuurt
    `Access-Control-Allow-Origin: *`).
 
+## Conditie en taal (belangrijk)
+
+De Cardmarket-dagbestanden bevatten geen conditie en geen taal. "Alleen Good of beter, alleen Engels"
+wordt hard afgedwongen op twee plekken: de **Live-tab** (CardTrader-listings hebben conditie en taal;
+standaard Engels + Good/MP of beter) en de **Cardmarket wants list** (Min. condition + Language + Email
+Alarm). De Deals-tab toont daarom de marge als bovengrens en een **versheidsvlag** uit de historie
+(nieuw laag / lager dan gisteren / stond gisteren al / hoger); wat gisteren al zo laag stond is meestal
+beschadigd, anderstalig of verborgen en wordt standaard verborgen.
+
+Als conditie-referentie haalt `scripts/justtcg-sync.mjs` (secret `JUSTTCG_API_KEY`, gratis tier: 1.000
+calls/maand) dagelijks met max 25 calls TCGplayer-prijzen per conditie (NM/LP/MP/HP/DMG, USD → EUR via
+ECB-koers) op voor watchlist-kaarten en de sets met de meeste top-deals; zichtbaar in het detailpaneel en
+onder "cond.". Koppeling via kaartnummer (TCGdex).
+
 ## Tabs
 
 - **Deals**: marktbrede scan op de Cardmarket-data. Signalen: nieuw laag (t.o.v. de laagste van de
@@ -48,8 +62,15 @@ Cardmarket-account gekoppeld.
   (25 goedkoopste aanbiedingen per kaart), sets scannen, en een **mandje-optimalisatie** die de
   goedkoopste combinatie van verkopers voor je watchlist berekent (hub gebundeld, losse verkoper alleen
   als de besparing de verzending dekt).
-- **Uitleg**: tijdstempels, tellingen, werking van Cardmarket's Email Alarm, de test voor onvindbare
-  listings en de koopworkflow.
+- **Trends**: stijgers en dalers (gisteren vs 7d, 7d vs 30d, laagste vs 7 dagen geleden).
+- **Voorraad**: gekochte kaarten met aantal en inkoopprijs tegenover de huidige Cardmarket-waarde en
+  netto winst na commissie; JSON/CSV.
+- **Kaartdetail** (klik op een naam of gebruik de zoekbalk): afbeelding, nummer en setcode via de open
+  TCGdex-database (`data/tcgdex.json`, ~19k gekoppelde Cardmarket-producten; `scripts/tcgdex-sync.mjs`
+  vult incrementeel aan), 60-daagse grafiek (laagste + 7d-gem., `site/data/hist/N.json`, 64 shards),
+  richtprijs per conditie, VS-conditieprijzen, links, watchlist/voorraad.
+- **Uitleg**: tijdstempels, tellingen, bronnenonderzoek (welke API's conditie-prijzen leveren), werking
+  van Cardmarket's Email Alarm, de test voor onvindbare listings en de koopworkflow.
 - **Extra's**: "Vandaag"-paneel (nieuwe dalingen + watchlist-treffers), negeerlijst, deelbare filter-URL
   (`#deals?minDisc=30&…`), CSV-export, setzoekveld, koopprijs-voorstel (75 % van 7d-gem.) met
   sparkline van de laatste 8 dagen, filter "verberg Aziatische sets", mobiele layout (inklapbare
