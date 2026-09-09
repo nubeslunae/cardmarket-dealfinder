@@ -33,6 +33,10 @@ test('isAsianSetName en suggestedBuyPrice', async () => {
   assert.equal(isAsianSetName('M-P Thai Promos'), true);
   assert.equal(isAsianSetName('Mega Evolution ID/TH'), true);
   assert.equal(isAsianSetName('Obsidian Flames'), false);
+  assert.equal(isAsianSetName('Expansion Pack 20th Anniversary'), true);
+  assert.equal(isAsianSetName('Pokémon Card 151'), true);
+  assert.equal(isAsianSetName('Pokémon Trading Card Game Classic: Charizard & Ho-Oh ex Deck'), false);
+  assert.equal(isAsianSetName('151'), false);
   assert.equal(isAsianSetName('Scarlet & Violet'), false);
   assert.equal(isAsianSetName(null), false);
   assert.equal(suggestedBuyPrice(10), 7.5);
