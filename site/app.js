@@ -10,7 +10,7 @@ const CT_BASE = 'https://api.cardtrader.com/api/v2';
 const CT_DELAY_MS = 250;
 const TCGDEX_IMG = 'https://assets.tcgdex.net/';
 const OFFSET = { n: 3, h: 8 };
-const COL = { prevLow: { n: 13, h: 14 }, yLow: { n: 15, h: 16 }, daysAtLow: { n: 17, h: 18 } };
+const COL = { prevLow: { n: 13, h: 14 }, yLow: { n: 15, h: 16 }, daysAtLow: { n: 17, h: 18 }, saleDays: { n: 19, h: 20 }, saleDaysN: { n: 21, h: 22 } };
 const FIXED = { NM: 1, EX: 0.9, GD: 0.75, PL: 0.6, PO: 0.4 };
 const COND_LABEL = { NM: 'Near Mint', EX: 'Excellent', GD: 'Good', PL: 'Played', PO: 'Poor' };
 
@@ -139,13 +139,31 @@ function evaluate(row, variant) {
     else if (daysAtLow >= 1 || Math.abs(low - yLow) <= 0.02 * low) fresh = 'same';
     else fresh = low < yLow ? 'lower' : 'higher';
   } else if (low != null && prevLow != null && low <= 0.7 * prevLow) fresh = 'new';
+  const saleDays = row[COL.saleDays[variant]] ?? 0; const saleDaysN = row[COL.saleDaysN[variant]] ?? 0;
+  const liq = liquidity(avg1, avg7, avg30, saleDays, saleDaysN);
   return {
-    id: row[0], name: row[1], exp: row[2], variant, low, trend, avg1, avg7, avg30, prevLow, yLow, daysAtLow, refs, fresh,
+    id: row[0], name: row[1], exp: row[2], variant, low, trend, avg1, avg7, avg30, prevLow, yLow, daysAtLow, refs, fresh, saleDays, saleDaysN, liq,
     sure: refs != null && low != null && low <= refs.PO, good: refs != null && low != null && low <= refs.GD, under: refs != null && low != null && low < refs.NM,
     marginMin: refs ? marginOf(refs.PO, low) : null, marginGood: refs ? marginOf(refs.GD, low) : null, marginNM: refs ? marginOf(refs.NM, low) : null,
     score: refs && low != null ? 1 - low / refs.PO : null, plausible: reasons.length === 0, reasons,
   };
 }
+/**
+ * Verkoopsnelheid. Cardmarket schuift het 1-daags gemiddelde door zolang er geen nieuwe verkoop is; als
+ * 1d-, 7d- en 30d-gemiddelde exact gelijk zijn, was er in 30 dagen precies één verkoop. Met historie tellen
+ * we dagen waarop het 1d-gemiddelde veranderde (= verkoop; gelijke prijzen worden gemist: ondergrens).
+ */
+function liquidity(avg1, avg7, avg30, saleDays, saleDaysN) {
+  const one = avg1 != null && avg1 === avg7 && avg7 === avg30;
+  if (saleDaysN >= 5) {
+    const ratio = saleDays / saleDaysN;
+    const cls = ratio >= 0.6 ? 'fast' : ratio >= 0.25 ? 'ok' : 'slow';
+    return { cls, label: `verkocht op ${saleDays} van ${saleDaysN} dagen`, one };
+  }
+  if (one) return { cls: 'slow', label: '1 verkoop in 30 dagen', one };
+  return { cls: 'unknown', label: saleDaysN ? `${saleDays} van ${saleDaysN} dagen (nog weinig historie)` : 'verkoopsnelheid nog onbekend', one };
+}
+const liqHtml = (d) => `<span class="fresh ${d.liq.cls === 'fast' ? 'new' : d.liq.cls === 'ok' ? 'lower' : d.liq.cls === 'slow' ? 'same' : 'unknown'}" title="Verkoopsnelheid uit Cardmarket-verkoopgemiddelden (ondergrens)">${d.liq.label}</span>`;
 const FRESH_LABEL = { new: 'nieuw laag', lower: 'lager dan gisteren', same: 'stond gisteren al', higher: 'hoger dan gisteren', unknown: 'geen historie' };
 function freshHtml(d) {
   const t = d.fresh === 'same' && d.daysAtLow > 1 ? `al ${d.daysAtLow} dagen` : FRESH_LABEL[d.fresh];
@@ -155,7 +173,7 @@ const marginHtml = (m) => (m == null ? '–' : `<span class="margin ${m > 0 ? 'p
 const dealBadge = (d) => (d.sure ? '<span class="badge good">zeker</span>' : d.good ? '<span class="badge accent">als Good+</span>' : '');
 
 /* ---------- deals ---------- */
-const DEAL_DEFAULTS = { mode: 'sure', minRef: 10, maxLow: '', variant: 'n', expq: '', exp: '', sort: 'marginMin', q: '', hideStale: true, plausibleOnly: true, onlyRatio: false };
+const DEAL_DEFAULTS = { mode: 'sure', minRef: 10, maxLow: '', variant: 'n', expq: '', exp: '', sort: 'marginMin', q: '', hideStale: true, plausibleOnly: true, hideSlow: true, onlyRatio: false };
 function initDeals() {
   const form = $('#filters');
   bindForm(form, state.filters, DEAL_DEFAULTS, () => { save(LS.filters, state.filters); state.visible = PAGE_SIZE; fillExpansionSelect(); renderDeals(); });
@@ -180,7 +198,7 @@ function computeDeals() {
   const variants = f.variant === 'both' ? ['n', 'h'] : [f.variant];
   const minRef = Number(f.minRef) || 0; const maxLow = num(f.maxLow); const exp = f.exp ? Number(f.exp) : null; const q = (f.q || '').toLowerCase();
   const asian = asianSetIds();
-  const out = []; let hiddenStale = 0; let hiddenImplausible = 0;
+  const out = []; let hiddenStale = 0; let hiddenImplausible = 0; let hiddenSlow = 0;
   for (const row of state.deals) {
     if (exp != null && row[2] !== exp) continue;
     if (f.plausibleOnly && asian.has(row[2])) continue;
@@ -195,6 +213,7 @@ function computeDeals() {
       if (f.mode === 'all' && !d.under) continue;
       if (f.plausibleOnly && !d.plausible) { hiddenImplausible += 1; continue; }
       if (f.hideStale && d.fresh === 'same') { hiddenStale += 1; continue; }
+      if (f.hideSlow && d.liq.cls === 'slow') { hiddenSlow += 1; continue; }
       out.push(d);
     }
   }
@@ -203,7 +222,7 @@ function computeDeals() {
     score: (a, b) => (b.score ?? -1e9) - (a.score ?? -1e9), low: (a, b) => a.low - b.low, ref: (a, b) => (b.avg7 ?? 0) - (a.avg7 ?? 0),
   };
   out.sort(sorters[f.sort] || sorters.marginMin);
-  out.hiddenStale = hiddenStale; out.hiddenImplausible = hiddenImplausible;
+  out.hiddenStale = hiddenStale; out.hiddenImplausible = hiddenImplausible; out.hiddenSlow = hiddenSlow;
   return out;
 }
 function renderDeals() {
@@ -215,7 +234,7 @@ function renderDeals() {
   const withRatio = results.filter((d) => d.refs.source === 'ratio').length;
   const days = historyDays();
   $('#deals-summary').textContent = results.length
-    ? `${results.length.toLocaleString('nl-NL')} ${modeText} · waarde ≥ ${fmtEur(Number(f.minRef) || 0)} · ${withRatio} met VS-conditiedata${results.hiddenStale ? ` · ${results.hiddenStale} verborgen die gisteren al zo laag stonden` : ''}${results.hiddenImplausible ? ` · ${results.hiddenImplausible} onwaarschijnlijke verborgen` : ''} · prijzen van ${fmtDate(state.meta?.sources?.guide?.createdAt)}${days < 2 ? ' · versheid werkt vanaf 2 dagen historie' : ''}. Tik op een kaart voor details.`
+    ? `${results.length.toLocaleString('nl-NL')} ${modeText} · waarde ≥ ${fmtEur(Number(f.minRef) || 0)} · ${withRatio} met VS-conditiedata${results.hiddenStale ? ` · ${results.hiddenStale} verborgen die gisteren al zo laag stonden` : ''}${results.hiddenSlow ? ` · ${results.hiddenSlow} traag verkopende verborgen` : ''}${results.hiddenImplausible ? ` · ${results.hiddenImplausible} onwaarschijnlijke verborgen` : ''} · prijzen van ${fmtDate(state.meta?.sources?.guide?.createdAt)}${days < 2 ? ' · versheid werkt vanaf 2 dagen historie' : ''}. Tik op een kaart voor details.`
     : `Geen treffers. Verlaag "Waarde vanaf", kies "Koopjes als Good of beter" of zet een filter uit.${results.hiddenStale ? ` (${results.hiddenStale} verborgen die gisteren al zo laag stonden.)` : ''}`;
   $$('#deals-table th[data-sort]').forEach((th) => th.classList.toggle('sorted', th.dataset.sort === f.sort));
   $('#filters-desc').textContent = `${modeText.split(' (')[0]} · waarde ≥ €${f.minRef}${f.exp ? ` · ${expLabel(Number(f.exp))}` : ''}`;
@@ -224,9 +243,10 @@ function renderDeals() {
     tr.innerHTML = `
       <td class="name">${nameHtml(d.name, d.id, d.variant)}${d.variant === 'h' ? '<span class="badge accent">holo</span>' : ''}${dealBadge(d)}${d.refs.source === 'ratio' ? '<span class="badge" title="Conditieverhoudingen uit VS-marktdata">VS</span>' : ''}${d.fresh === 'new' ? '<span class="badge good">nieuw laag</span>' : ''}
         <span class="set-inline">${escapeHtml(expLabel(d.exp))}</span>
-        <span class="m-stats"><b>${fmtEur(d.low)}</b> · NM ${fmtEur(d.refs.NM)} · Poor ${fmtEur(d.refs.PO)} · marge min. ${marginHtml(d.marginMin)} ${cardLink(d.name, d.exp, d.id)}</span></td>
+        <span class="m-stats"><b>${fmtEur(d.low)}</b> · NM ${fmtEur(d.refs.NM)} · Poor ${fmtEur(d.refs.PO)} · marge min. ${marginHtml(d.marginMin)} · ${liqHtml(d)} ${cardLink(d.name, d.exp, d.id)}</span></td>
       <td class="num opt">${fmtEur(d.low)}</td>
       <td class="opt">${freshHtml(d)}</td>
+      <td class="opt">${liqHtml(d)}</td>
       <td class="num opt">${fmtEur(d.refs.NM)}</td>
       <td class="num opt">${fmtEur(d.refs.GD)}</td>
       <td class="num opt">${fmtEur(d.refs.PO)}</td>
@@ -235,7 +255,7 @@ function renderDeals() {
       <td class="actions opt">${linksHtml(d.name, d.exp, d.id)}</td>`;
     return tr;
   }));
-  if (!shown.length) { const tr = document.createElement('tr'); tr.innerHTML = '<td colspan="9" class="empty">Niets gevonden.</td>'; tbody.replaceChildren(tr); }
+  if (!shown.length) { const tr = document.createElement('tr'); tr.innerHTML = '<td colspan="10" class="empty">Niets gevonden.</td>'; tbody.replaceChildren(tr); }
   $('#deals-more').hidden = results.length <= state.visible;
 }
 
@@ -292,7 +312,7 @@ async function openDetail(id, variant = 'n') {
       <div>
         <h2>${nameHtml(name)}</h2>
         <div class="exp">${escapeHtml(expLabel(exp))}${t?.number ? ` · #${escapeHtml(t.number)}` : ''}${variant === 'h' ? ' · holo/reverse' : ''}</div>
-        <p>${d ? `${dealBadge(d)} ${freshHtml(d)}` : ''} ${d && !d.plausible ? `<span class="badge warn" title="${escapeHtml(d.reasons.join('; '))}">onwaarschijnlijk</span>` : ''}</p>
+        <p>${d ? `${dealBadge(d)} ${freshHtml(d)} ${liqHtml(d)}` : ''} ${d && !d.plausible ? `<span class="badge warn" title="${escapeHtml(d.reasons.join('; '))}">onwaarschijnlijk</span>` : ''}</p>
         <div class="metrics">${[['Laagste', p?.low], ['Trend', p?.trend], ['Gem. 1d', p?.avg1], ['Gem. 7d', p?.avg7], ['Gem. 30d', p?.avg30], ['Vorige 7d laagste', d?.prevLow]].map(([k, v]) => `<div><div class="k">${k}</div><div class="v">${fmtEur(v)}</div></div>`).join('')}</div>
         <div class="detail-actions">${linksHtml(name, exp, id)}${ct ? ` <a href="${cardtraderUrl(ct[0])}" target="_blank" rel="noopener">CardTrader ↗</a>` : ''} <button type="button" class="btn" id="detail-wants">Kopieer voor wants list</button></div>
         <p class="msg" id="detail-msg"></p>

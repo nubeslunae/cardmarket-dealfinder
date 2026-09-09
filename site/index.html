@@ -75,6 +75,7 @@
         </label>
         <label class="check" title="Een echt koopje is binnen een dag weg. Wat gisteren al zo laag stond is meestal beschadigd, anderstalig of verborgen."><input name="hideStale" type="checkbox" checked> verberg wat gisteren al zo laag stond</label>
         <label class="check" title="Verbergt Aziatische sets en kaarten met tegenstrijdige referenties of een laagste onder €1."><input name="plausibleOnly" type="checkbox" checked> verberg onwaarschijnlijke</label>
+        <label class="check" title="Verbergt kaarten met maar één verkoop in 30 dagen (alle verkoopgemiddelden gelijk) of, met historie, verkopen op minder dan een kwart van de dagen."><input name="hideSlow" type="checkbox" checked> verberg traag verkopende</label>
         <label class="check" title="Alleen kaarten waarvoor echte conditie-verhoudingen uit de VS-markt (JustTCG) beschikbaar zijn"><input name="onlyRatio" type="checkbox"> alleen met VS-conditiedata</label>
         <button type="button" class="btn" id="filters-reset">Reset</button>
       </form>
@@ -93,6 +94,7 @@
               <th data-sort="low">Kaart</th>
               <th class="num opt" data-sort="low" title="Goedkoopste listing vandaag, élke conditie en taal">Laagste</th>
               <th class="opt" title="Versheid t.o.v. gisteren">Sinds</th>
+              <th class="opt" title="Verkoopsnelheid: dagen met een nieuwe verkoop (uit het 1-daags verkoopgemiddelde); '1 verkoop in 30 dagen' als alle gemiddelden gelijk zijn">Verkoopt</th>
               <th class="num opt" data-sort="ref" title="Waarde in Near Mint (Cardmarket 7d-verkoopgemiddelde)">NM</th>
               <th class="num opt" title="Waarde als Good">Good</th>
               <th class="num opt" title="Waarde als Poor (ondergrens)">Poor</th>
@@ -196,6 +198,7 @@
         <p>De waarde per conditie: NM = Cardmarket 7-daags verkoopgemiddelde. De verhoudingen voor lagere condities komen uit de <strong>VS-markt (TCGplayer via JustTCG)</strong> waar beschikbaar (echte marktdata per conditie: NM/LP/MP/HP/DMG, per kaart), anders uit vaste percentages (EX 90 %, Good 75 %, Played 60 %, Poor 40 %). Kaarten met VS-data krijgen het label <span class="badge accent">VS-ratio</span>; het aantal groeit dagelijks met ~500.</p>
         <p><strong>Marge</strong> = conditiewaarde × (1 − verkoopcommissie) − laagste − verzending. "Marge min." rekent met de Poor-waarde en is dus een veilige ondergrens; "Marge Good+" met de Good-waarde.</p>
         <p><strong>Sinds</strong> (versheid) komt uit de dagelijkse historie: een echt koopje is binnen een dag weg. Wat gisteren al zo laag stond is meestal beschadigd, anderstalig of verborgen, en wordt standaard verborgen.</p>
+        <p><strong>Verkoopt</strong> (verkoopsnelheid): Cardmarket geeft geen verkoopaantallen, maar het 1-daags verkoopgemiddelde wordt doorgeschoven zolang er geen nieuwe verkoop is. Zijn 1d-, 7d- en 30d-gemiddelde exact gelijk, dan was er in 30 dagen precies één verkoop ("traag", standaard verborgen). Met historie tellen we op hoeveel dagen het 1d-gemiddelde veranderde: dat is een ondergrens van het aantal verkoopdagen (verkopen tegen exact dezelfde prijs worden gemist). Vanaf ~5 dagen historie verschijnt "verkocht op X van Y dagen"; ≥ 60 % = snel, ≥ 25 % = normaal, daaronder traag.</p>
 
         <h2>Waarom vind ik een lage "laagste" niet terug?</h2>
         <ol>
