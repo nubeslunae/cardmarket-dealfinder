@@ -4,7 +4,7 @@
 // conditie ≥ Moderately Played (≈ Cardmarket Good). Per run maximaal CT_FLOOR_MAX_SETS sets, de langst niet
 // ververste eerst; de rest komt van de vorige versie op de live site. Alleen sets die aan deals gekoppeld zijn.
 //
-// Uitvoer: site/data/ctfloor.json { updatedAt, sets: { ctExpId: fetchedAt }, cards: { cmId: { n: [prijs, aantal, zero], h: [...] } } }
+// Uitvoer: site/data/ctfloor.json { v: 2, updatedAt, sets: { ctExpId: fetchedAt }, cards: { cmId: { n: [goodPlus, aantal, zero, nm], h: [...] } } }
 // Env: CARDTRADER_TOKEN, OUT_DIR (site/data), SITE_URL, CT_FLOOR_MAX_SETS (60), CT_DELAY_MS (300)
 
 import { readFile, writeFile } from 'node:fs/promises';
@@ -51,7 +51,8 @@ async function main() {
     if (value.get(id) >= 5) weight.set(exp, (weight.get(exp) || 0) + 1);
   }
   const prev = (await readJson('ctfloor.json', null)) || (await liveJson('ctfloor.json')) || { sets: {}, cards: {} };
-  const fetchedAt = { ...(prev.sets || {}) }; const cards = { ...(prev.cards || {}) };
+  // Formaatwissel (v2: ook NM-vraagprijs): oude waarden blijven bruikbaar, maar alle sets worden opnieuw ingepland.
+  const fetchedAt = prev.v === 2 ? { ...(prev.sets || {}) } : {}; const cards = { ...(prev.cards || {}) };
   const todo = pickSets([...expSets.keys()], fetchedAt, MAX_SETS, (e) => weight.get(e) || 0);
   console.log(`CardTrader-ondergrens: ${expSets.size} relevante sets, ${Object.keys(fetchedAt).length} eerder opgehaald, ${todo.length} deze run`);
   let ok = 0; let listings = 0; let bytes = 0;
@@ -70,7 +71,7 @@ async function main() {
     } catch (err) { console.warn(`set ${exp} overgeslagen: ${err.message}`); }
     await sleep(DELAY);
   }
-  const out = { updatedAt: new Date().toISOString(), sets: fetchedAt, cards };
+  const out = { v: 2, updatedAt: new Date().toISOString(), sets: fetchedAt, cards };
   await writeFile(path.join(OUT_DIR, 'ctfloor.json'), JSON.stringify(out));
   const metaFile = path.join(OUT_DIR, 'meta.json');
   if (existsSync(metaFile)) { const meta = JSON.parse(await readFile(metaFile, 'utf8')); meta.ctfloor = { updatedAt: out.updatedAt, cards: Object.keys(cards).length, sets: Object.keys(fetchedAt).length, relevantSets: expSets.size, fetchedThisRun: ok }; await writeFile(metaFile, JSON.stringify(meta)); }

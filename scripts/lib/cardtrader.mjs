@@ -60,9 +60,10 @@ export function buildMap({ blueprints, ctExpansions, cmProducts }) {
 /**
  * Engelse Good+-ondergrens per blueprint uit ruwe marketplace-producten (één set). Alleen losse, niet-graded,
  * niet-sealed aanbiedingen in het Engels met conditie ≥ minRank (2 = Moderately Played ≈ Cardmarket Good),
- * van verkopers die niet op vakantie zijn. Levert { blueprintId: { n: [prijs, aantal, zero], h: [...] } }.
+ * van verkopers die niet op vakantie zijn. Levert { blueprintId: { n: [goodPlus, aantal, zero, nm], h: [...] } }:
+ * goedkoopste Good+-vraagprijs, aantal Good+-aanbiedingen, Zero-vlag van de goedkoopste, goedkoopste NM+-vraagprijs.
  */
-export function floorByBlueprint(products, normalize, { minRank = 2, language = 'en' } = {}) {
+export function floorByBlueprint(products, normalize, { minRank = 2, nmRank = 4, language = 'en' } = {}) {
   const out = {};
   for (const raw of products) {
     const l = normalize(raw);
@@ -73,8 +74,10 @@ export function floorByBlueprint(products, normalize, { minRank = 2, language = 
     const key = l.variant ? 'h' : 'n';
     const e = out[l.blueprintId] || (out[l.blueprintId] = {});
     const cur = e[key];
-    if (!cur) e[key] = [l.price, 1, l.seller.hub ? 1 : 0];
+    if (!cur) e[key] = [l.price, 1, l.seller.hub ? 1 : 0, null];
     else { cur[1] += 1; if (l.price < cur[0]) { cur[0] = l.price; cur[2] = l.seller.hub ? 1 : 0; } }
+    const c = e[key];
+    if (l.conditionRank >= nmRank && (c[3] == null || l.price < c[3])) c[3] = l.price;
   }
   return out;
 }
