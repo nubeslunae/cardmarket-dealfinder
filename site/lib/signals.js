@@ -101,3 +101,64 @@ export function interleaveByClass(items, classOf) {
   while (added) { added = false; for (const k of order) { const g = groups.get(k); if (i < g.length) { out.push(g[i]); added = true; } } i += 1; }
   return out;
 }
+
+/**
+ * Robuuste NM-referentie. Eén verkoop van een gegradeerde kaart of een vergissing trekt het 7-daags gemiddelde
+ * (avg7) naar absurde hoogte (Ho-Oh UF27 reverse: € 0,50 en ± € 1.800 verkocht → avg7 € 907 bij een normale versie
+ * van € 9 en een CardTrader-vraagprijs van € 30). Daarom: de mediaan van trend, avg7 en avg30, getoetst aan
+ * onafhankelijke meetlatten. Levert { nm, ok, reasons, warnings }; ok=false = referentie onbetrouwbaar, dan geen
+ * "zeker koopje" of "als Good+" (de waarde is onbekend, niet laag).
+ *   ctFloor   goedkoopste Engelse Good+-vraagprijs op CardTrader (≥ €1 om te tellen)
+ *   usPrice   TCGplayer-marktprijs in EUR (≥ €1 om te tellen)
+ *   normalNm  referentie van de normale versie (voor de reverse-holo-variant)
+ */
+export function robustReference({ trend = null, avg1 = null, avg7 = null, avg30 = null, ctFloor = null, usPrice = null, normalNm = null } = {}) {
+  const vals = [trend, avg7, avg30].filter((v) => v != null && v > 0);
+  if (!vals.length) return { nm: null, ok: false, reasons: [{ code: 'none', text: 'geen verkoopgemiddelde of trend' }], warnings: [] };
+  const nm = median(vals);
+  const reasons = []; const warnings = [];
+  const spread = vals.length >= 2 ? Math.max(...vals) / Math.min(...vals) : 1;
+  if (spread > 3) reasons.push({ code: 'spread', text: `trend, 7d- en 30d-gemiddelde liggen ${spread.toFixed(1)}× uiteen (één uitschieter-verkoop weegt zwaar)` });
+  if (ctFloor != null && ctFloor >= 1 && nm > 6 * ctFloor) reasons.push({ code: 'ct', text: `referentie ${fmt(nm)} is meer dan 6× de CardTrader-vraagprijs voor Engels Good+ (${fmt(ctFloor)})` });
+  if (usPrice != null && usPrice >= 1 && nm > 5 * usPrice) reasons.push({ code: 'us', text: `referentie ${fmt(nm)} is meer dan 5× de VS-marktprijs (${fmt(usPrice)})` });
+  const anchored = (ctFloor != null && ctFloor >= 1 && nm <= 3 * ctFloor) || (usPrice != null && usPrice >= 1 && nm <= 3 * usPrice);
+  if (normalNm != null && normalNm > 0 && nm > 5 * normalNm && !anchored) reasons.push({ code: 'variant', text: `reverse-holo-referentie ${fmt(nm)} is meer dan 5× de normale versie (${fmt(normalNm)}) zonder bevestiging door CardTrader of VS-markt` });
+  if (avg1 != null && avg1 === avg7 && avg7 === avg30) warnings.push({ code: 'single', text: 'precies één verkoop in 30 dagen: referentie rust op één transactie' });
+  else if (avg1 != null && avg1 > 0 && avg1 < 0.25 * nm) warnings.push({ code: 'lastsale', text: `laatste verkoop (${fmt(avg1)}) ver onder de referentie: markt cleart lager, of het was een beschadigd/anderstalig exemplaar` });
+  return { nm, ok: reasons.length === 0, reasons, warnings, spread, anchored };
+}
+
+/** Conditieladders (fractie van NM). Vintage (t/m HGSS/Call of Legends): gemeten op CardTrader-vraagprijzen, Base Set:
+ *  Good+-vraag mediaan 31 % van NM-vraag. Modern: conditie maakt nauwelijks uit (NM/Good+ ≈ 1,03), vaste ladder. */
+export const LADDERS = Object.freeze({
+  modern: Object.freeze({ EX: 0.9, GD: 0.75, PL: 0.6, PO: 0.4 }),
+  vintage: Object.freeze({ EX: 0.8, GD: 0.4, PL: 0.25, PO: 0.12 }),
+});
+const VINTAGE_SERIES = /^(base|basep|gym|neo|ecard|ex|dp|dpp|pl|hgss|hgssp|col|pop|np|wp|si|lc|tk)$/;
+/** Tijdperk uit een TCGdex-kaart-id ("ex5-27" → "ex" → vintage; "sv03-125" → modern); null zonder id. */
+export function eraOf(tcgId) {
+  const p = String(tcgId || '').split('-')[0].replace(/[0-9.].*$/, '').toLowerCase();
+  if (!p) return null;
+  return VINTAGE_SERIES.test(p) ? 'vintage' : 'modern';
+}
+/**
+ * Conditieverhoudingen voor één kaart, in volgorde van betrouwbaarheid:
+ *  1. CardTrader-vraagprijzen (ctGood = goedkoopste Good+, ctNm = goedkoopste NM): alleen als er echt een goedkoper
+ *     gespeeld exemplaar ligt (ctGood ≤ 85 % van ctNm), anders zegt de verhouding niets over gespeelde exemplaren;
+ *  2. VS-marktdata per conditie (JustTCG: NM/LP/MP/HP/DMG), begrensd;
+ *  3. tijdperk-ladder (vintage of modern).
+ */
+export function conditionLadder({ ctGood = null, ctNm = null, jt = null, era = null } = {}) {
+  const base = era === 'vintage' ? LADDERS.vintage : LADDERS.modern;
+  if (ctGood != null && ctNm != null && ctNm >= 1 && ctGood > 0 && ctGood <= 0.85 * ctNm) {
+    const gd = Math.min(0.95, Math.max(0.15, ctGood / ctNm));
+    const k = gd / base.GD; // rest van de ladder schaalt mee met de gemeten Good-verhouding
+    return { EX: Math.min(0.97, Math.max(gd, base.EX * Math.sqrt(k))), GD: gd, PL: Math.min(gd, base.PL * k), PO: Math.min(gd, Math.max(0.05, base.PO * k)), source: 'ct' };
+  }
+  if (jt && jt.NM > 0) {
+    const r = (k, fb, cap) => (jt[k] > 0 ? Math.min(cap, Math.max(0.15, jt[k] / jt.NM)) : Math.min(cap, fb));
+    const ex = r('LP', base.EX, 0.95); const gd = Math.min(ex, r('MP', base.GD, 0.85)); const pl = Math.min(gd, r('HP', base.PL, 0.7)); const po = Math.min(pl, r('DMG', base.PO, 0.55));
+    return { EX: ex, GD: gd, PL: pl, PO: po, source: 'vs' };
+  }
+  return { ...base, source: era === 'vintage' ? 'vintage' : 'vast' };
+}

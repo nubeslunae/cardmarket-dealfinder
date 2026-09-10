@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { rarityClass, suspectReasons, median, peerOutlier, interleaveByClass, cardmarketRarityUrl, RARITY_CLASSES } from '../site/lib/signals.js';
+import { rarityClass, suspectReasons, median, peerOutlier, interleaveByClass, cardmarketRarityUrl, RARITY_CLASSES, robustReference, conditionLadder, eraOf, LADDERS } from '../site/lib/signals.js';
 import { classifySetLanguage } from '../scripts/lib/sets.mjs';
 import { buildRarity } from '../scripts/rarity-sync.mjs';
 import { floorByBlueprint } from '../scripts/lib/cardtrader.mjs';
@@ -122,9 +122,9 @@ test('floorByBlueprint: alleen losse Engelse Good+-aanbiedingen, per variant, me
     mk({ blueprint_id: 8, price: { cents: 120 }, properties_hash: { condition: 'Slightly Played', pokemon_language: 'en' } }),
   ];
   const f = floorByBlueprint(products, normalizeListing);
-  assert.deepEqual(f[7].n, [4.5, 2, 1]);
-  assert.deepEqual(f[7].h, [9, 1, 0]);
-  assert.deepEqual(f[8].n, [1.2, 1, 0]);
+  assert.deepEqual(f[7].n, [4.5, 2, 1, 5]); // Good+ 4,50 (MP), NM 5,00
+  assert.deepEqual(f[7].h, [9, 1, 0, 9]);
+  assert.deepEqual(f[8].n, [1.2, 1, 0, null]); // alleen Slightly Played: geen NM-vraagprijs
   assert.equal(floorByBlueprint(products, normalizeListing, { minRank: 4 })[7].n[0], 5);
 });
 
@@ -132,4 +132,35 @@ test('pickSets: nooit opgehaald eerst, dan de oudste, begrensd', () => {
   const at = { 1: '2026-09-08T00:00:00Z', 2: '2026-09-01T00:00:00Z' };
   assert.deepEqual(pickSets([1, 2, 3, 4], at, 3, (x) => ({ 3: 1, 4: 9 }[x] || 0)), [4, 3, 2]);
   assert.deepEqual(pickSets([1, 2, 3, 4], at, 3), [3, 4, 2]);
+});
+
+test('robustReference: mediaan van trend/7d/30d, uitschieters afgekeurd, bevestigde reverse holo goedgekeurd', () => {
+  // Ho-Oh UF27 reverse: € 0,50 en ± € 1.800 verkocht
+  const hooh = robustReference({ trend: 844.34, avg1: 0.5, avg7: 907.18, avg30: 235, ctFloor: 30.07, normalNm: 8.71 });
+  assert.equal(hooh.ok, false); assert.deepEqual(hooh.reasons.map((r) => r.code), ['spread', 'ct', 'variant']); assert.equal(hooh.warnings[0].code, 'lastsale');
+  const normal = robustReference({ trend: 8.52, avg1: 4.05, avg7: 10.86, avg30: 8.71, ctFloor: 1.95 });
+  assert.equal(normal.ok, true); assert.equal(normal.nm, 8.71);
+  // Legendary Collection Articuno reverse: 20× de normale versie, maar CardTrader bevestigt
+  const art = robustReference({ trend: 409.62, avg1: 150, avg7: 440.71, avg30: 292.12, ctFloor: 640.11, normalNm: 21.82 });
+  assert.equal(art.ok, true); assert.equal(art.anchored, true);
+  assert.equal(robustReference({ trend: 100, avg7: 100, avg30: 100, usPrice: 10 }).reasons[0].code, 'us');
+  assert.equal(robustReference({ trend: 5, avg1: 5, avg7: 5, avg30: 5 }).warnings[0].code, 'single');
+  assert.equal(robustReference({}).ok, false);
+  assert.equal(robustReference({ avg7: 12 }).nm, 12);
+});
+
+test('eraOf en conditionLadder: CardTrader-verhouding, VS-data, tijdperk-ladder', () => {
+  assert.equal(eraOf('ex5-27'), 'vintage'); assert.equal(eraOf('base1-4'), 'vintage'); assert.equal(eraOf('hgss1-1'), 'vintage'); assert.equal(eraOf('col1-1'), 'vintage');
+  assert.equal(eraOf('bw1-1'), 'modern'); assert.equal(eraOf('sv03-125'), 'modern'); assert.equal(eraOf('swsh7-218'), 'modern'); assert.equal(eraOf(null), null);
+  // CardTrader: Good+ 3,10 vs NM 10 → Good 31 %, rest schaalt mee
+  const ct = conditionLadder({ ctGood: 3.1, ctNm: 10, era: 'modern' });
+  assert.equal(ct.source, 'ct'); assert.equal(ct.GD, 0.31); assert.ok(ct.PO < ct.PL && ct.PL < ct.GD && ct.GD < ct.EX && ct.EX <= 0.97);
+  // Good+ ≈ NM: zegt niets over gespeelde exemplaren → ladder
+  assert.equal(conditionLadder({ ctGood: 9.7, ctNm: 10, era: 'modern' }).source, 'vast');
+  assert.deepEqual(conditionLadder({ era: 'vintage' }), { ...LADDERS.vintage, source: 'vintage' });
+  assert.deepEqual(conditionLadder({}), { ...LADDERS.modern, source: 'vast' });
+  const vs = conditionLadder({ jt: { NM: 10, LP: 9, MP: 7, HP: 5, DMG: 3 } });
+  assert.equal(vs.source, 'vs'); assert.equal(vs.GD, 0.7); assert.equal(vs.PO, 0.3);
+  // CardTrader gaat voor VS
+  assert.equal(conditionLadder({ ctGood: 3, ctNm: 10, jt: { NM: 10, MP: 7 } }).source, 'ct');
 });

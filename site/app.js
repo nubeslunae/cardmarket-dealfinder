@@ -3,7 +3,7 @@
    en de conditie-onafhankelijke test "laagste onder Poor-waarde" = zeker koopje. */
 import { DEFAULT_SETTINGS, normalizeListing, passesFilters, landedCost } from './lib/landed.js';
 import { splitName, cardmarketCardUrl, cardmarketSetUrl, cardmarketSearchUrl, cardtraderUrl, isAsianSetName, suggestedBuyPrice, pricechartingUrl } from './lib/links.js';
-import { RARITY_CLASSES, rarityClass, cardmarketRarityUrl, suspectReasons, peerOutlier, interleaveByClass } from './lib/signals.js';
+import { RARITY_CLASSES, rarityClass, cardmarketRarityUrl, suspectReasons, peerOutlier, interleaveByClass, robustReference, conditionLadder, eraOf } from './lib/signals.js';
 
 const LS = { filters: 'cmdf.filters', costs: 'cmdf.costs', token: 'cmdf.ct.token', ctSettings: 'cmdf.ct.settings', liveFilters: 'cmdf.livefilters' };
 const PAGE_SIZE = 150;
@@ -13,7 +13,6 @@ const TCGDEX_IMG = 'https://assets.tcgdex.net/';
 const OFFSET = { n: 3, h: 8 };
 const COL = { prevLow: { n: 13, h: 14 }, yLow: { n: 15, h: 16 }, daysAtLow: { n: 17, h: 18 }, saleDays: { n: 19, h: 20 }, saleDaysN: { n: 21, h: 22 }, reprints: 23, lastReprint: 24, medLow: { n: 25, h: 26 } };
 const ROTATING_MARKS = new Set(['H']); // roteert bij de volgende rotatie (rond april 2027); G en ouder zijn al uit Standard
-const FIXED = { NM: 1, EX: 0.9, GD: 0.75, PL: 0.6, PO: 0.4 };
 const COND_LABEL = { NM: 'Near Mint', EX: 'Excellent', GD: 'Good', PL: 'Played', PO: 'Poor' };
 
 const state = {
@@ -119,21 +118,23 @@ function showTab(name) {
   try { history.replaceState(null, '', `#${name}`); } catch { /* noop */ }
 }
 
-/* ---------- conditiewaarde per kaart ---------- */
-/** Waarde per conditie: NM = Cardmarket 7d-gem.; verhoudingen uit VS-markt (JustTCG) als beschikbaar, anders vast. */
+/* ---------- referentie en conditiewaarde per kaart ---------- */
+/** Robuuste NM-referentie (mediaan van trend/7d/30d, getoetst aan CardTrader en VS-markt) voor een kaart/variant. */
+function nmReference(id, variant, p) {
+  if (!p) return { nm: null, ok: false, reasons: [], warnings: [] };
+  const ctf = ctFloorOf(id, variant);
+  const normal = variant === 'h' ? (() => { const s = state.shards.get(id % (state.meta?.shardCount || 64))?.[id]; return s ? median3(s[1], s[3], s[4]) : null; })() : null;
+  return robustReference({ trend: p.trend, avg1: p.avg1, avg7: p.avg7, avg30: p.avg30, ctFloor: ctf?.[0] ?? null, usPrice: usPrice(id, variant), normalNm: normal });
+}
+const median3 = (...v) => { const a = v.filter((x) => x != null && x > 0).sort((x, y) => x - y); return a.length ? (a.length % 2 ? a[(a.length - 1) / 2] : (a[a.length / 2 - 1] + a[a.length / 2]) / 2) : null; };
+/** Waarde per conditie: NM = robuuste referentie; verhoudingen uit CardTrader-vraagprijzen, VS-markt of tijdperk-ladder. */
 function condRefs(id, variant, nm) {
   if (nm == null || nm <= 0) return null;
-  const c = state.justtcg?.cards?.[id]?.[variant === 'h' ? 'h' : 'n'];
-  let f = FIXED; let source = 'vast';
-  if (c && c.NM > 0) {
-    // VS-verhoudingen zijn per kaart echt, maar bij dure of nieuwe kaarten schaars; daarom begrensd (nooit boven
-    // EX 95 %, Good 85 %, Played 70 %, Poor 55 % van NM) zodat "zeker koopje" een veilige ondergrens blijft.
-    const r = (k, fb, cap) => (c[k] > 0 ? Math.min(cap, Math.max(0.15, c[k] / c.NM)) : Math.min(cap, fb));
-    const ex = r('LP', FIXED.EX, 0.95); const gd = Math.min(ex, r('MP', FIXED.GD, 0.85)); const pl = Math.min(gd, r('HP', FIXED.PL, 0.7)); const po = Math.min(pl, r('DMG', FIXED.PO, 0.55));
-    f = { NM: 1, EX: ex, GD: gd, PL: pl, PO: po }; source = 'ratio';
-  }
-  return { NM: nm, EX: nm * f.EX, GD: nm * f.GD, PL: nm * f.PL, PO: nm * f.PO, source };
+  const ctf = ctFloorOf(id, variant); const jt = state.justtcg?.cards?.[id]?.[variant === 'h' ? 'h' : 'n'];
+  const lad = conditionLadder({ ctGood: ctf?.[0] ?? null, ctNm: ctf?.[3] ?? null, jt: jt && jt.NM > 0 ? jt : null, era: eraOf(tcgdexOf(id)?.tcgId) });
+  return { NM: nm, EX: nm * lad.EX, GD: nm * lad.GD, PL: nm * lad.PL, PO: nm * lad.PO, source: lad.source, ladder: lad };
 }
+const SOURCE_LABEL = { ct: 'CardTrader-vraagprijzen NM en Good+ voor deze kaart', vs: 'VS-marktdata per conditie (TCGplayer via JustTCG)', vintage: 'vintage-ladder (t/m HGSS: Good 40 %, Played 25 %, Poor 12 % van NM; gemeten op CardTrader)', vast: 'vaste ladder (Good 75 %, Played 60 %, Poor 40 % van NM)' };
 const COST_DEFAULTS = { sellCommissionPct: 5, buyShipping: 1.5 };
 function marginOf(value, price) {
   if (value == null || price == null) return null;
@@ -143,11 +144,10 @@ function evaluate(row, variant) {
   const o = OFFSET[variant];
   const [low, trend, avg1, avg7, avg30] = row.slice(o, o + 5);
   const prevLow = row[COL.prevLow[variant]] ?? null; const yLow = row[COL.yLow[variant]] ?? null; const daysAtLow = row[COL.daysAtLow[variant]] ?? 0;
-  const refs = condRefs(row[0], variant, avg7);
-  const vals = [trend, avg7, avg30].filter((v) => v != null && v > 0);
-  const spread = vals.length >= 2 ? Math.max(...vals) / Math.min(...vals) : 1;
-  const reasons = [];
-  if (spread > 3) reasons.push('referentie inconsistent (trend/7d/30d > 3× uiteen)');
+  const normalNm = variant === 'h' ? median3(row[4], row[6], row[7]) : null;
+  const ref = robustReference({ trend, avg1, avg7, avg30, ctFloor: ctFloorOf(row[0], variant)?.[0] ?? null, usPrice: usPrice(row[0], variant), normalNm });
+  const refs = condRefs(row[0], variant, ref.nm);
+  const reasons = ref.reasons.map((r) => r.text);
   if (low != null && trend != null && low < 0.1 * trend) reasons.push('laagste < 10 % van trend');
   if (low != null && low < 1) reasons.push('laagste onder €1');
   let fresh = 'unknown';
@@ -163,7 +163,7 @@ function evaluate(row, variant) {
   const sig = suspectReasons({ low, prevLow, daysAtLow, medLow, goodValue: refs?.GD, ctFloor });
   return {
     id: row[0], name: row[1], exp: row[2], variant, low, trend, avg1, avg7, avg30, prevLow, yLow, daysAtLow, refs, fresh, saleDays, saleDaysN, liq, reprints, lastReprint,
-    medLow, ctFloor, ctCount: ctf ? ctf[1] : 0, ctZero: ctf ? Boolean(ctf[2]) : false, suspect: sig.suspect, suspectReasons: sig.reasons, notes: sig.notes, rarity: rarityOf(row[0]),
+    medLow, ctFloor, ctNm: ctf ? ctf[3] ?? null : null, ctCount: ctf ? ctf[1] : 0, ctZero: ctf ? Boolean(ctf[2]) : false, suspect: sig.suspect, suspectReasons: sig.reasons, notes: sig.notes, rarity: rarityOf(row[0]), ref,
     sure: refs != null && low != null && low <= refs.PO, good: refs != null && low != null && low <= refs.GD, under: refs != null && low != null && low < refs.NM,
     marginMin: refs ? marginOf(refs.PO, low) : null, marginGood: refs ? marginOf(refs.GD, low) : null, marginNM: refs ? marginOf(refs.NM, low) : null,
     score: refs && low != null ? 1 - low / refs.PO : null, plausible: reasons.length === 0, reasons,
@@ -228,9 +228,9 @@ function computeDeals() {
     if (q && !row[1].toLowerCase().includes(q) && String(row[2]) !== q) continue;
     for (const v of variants) {
       const d = evaluate(row, v);
-      if (!d.refs || d.low == null || d.avg7 < minRef) continue;
+      if (!d.refs || d.low == null || d.refs.NM < minRef) continue;
       if (maxLow != null && d.low > maxLow) continue;
-      if (f.onlyRatio && d.refs.source !== 'ratio') continue;
+      if (f.onlyRatio && d.refs.source !== 'ct' && d.refs.source !== 'vs') continue;
       if (f.mode === 'sure' && !d.sure) continue;
       if (f.mode === 'good' && !d.good) continue;
       if (f.mode === 'all' && !d.under) continue;
@@ -244,7 +244,7 @@ function computeDeals() {
   }
   const sorters = {
     marginMin: (a, b) => (b.marginMin ?? -1e9) - (a.marginMin ?? -1e9), marginGood: (a, b) => (b.marginGood ?? -1e9) - (a.marginGood ?? -1e9),
-    score: (a, b) => (b.score ?? -1e9) - (a.score ?? -1e9), low: (a, b) => a.low - b.low, ref: (a, b) => (b.avg7 ?? 0) - (a.avg7 ?? 0),
+    score: (a, b) => (b.score ?? -1e9) - (a.score ?? -1e9), low: (a, b) => a.low - b.low, ref: (a, b) => (b.refs?.NM ?? 0) - (a.refs?.NM ?? 0),
   };
   out.sort(sorters[f.sort] || sorters.marginMin);
   const result = f.sort === 'rarity' ? interleaveByClass(out, (d) => d.rarity) : out;
@@ -257,17 +257,17 @@ function renderDeals() {
   const shown = results.slice(0, state.visible);
   const f = state.filters;
   const modeText = { sure: 'zekere koopjes (laagste onder Poor-waarde)', good: 'koopjes als Good of beter', all: 'alles onder NM-waarde' }[f.mode];
-  const withRatio = results.filter((d) => d.refs.source === 'ratio').length;
+  const withRatio = results.filter((d) => d.refs.source === 'ct' || d.refs.source === 'vs').length;
   const days = historyDays();
   $('#deals-summary').textContent = results.length
-    ? `${results.length.toLocaleString('nl-NL')} ${modeText} · waarde ≥ ${fmtEur(Number(f.minRef) || 0)} · ${withRatio} met VS-conditiedata${results.hiddenStale ? ` · ${results.hiddenStale} verborgen die gisteren al zo laag stonden` : ''}${results.hiddenSlow ? ` · ${results.hiddenSlow} traag verkopende verborgen` : ''}${results.hiddenImplausible ? ` · ${results.hiddenImplausible} onwaarschijnlijke verborgen` : ''}${results.hiddenSuspect ? ` · ${results.hiddenSuspect} verborgen die waarschijnlijk niet Engels/Good+ zijn` : ''} · prijzen van ${fmtDate(state.meta?.sources?.guide?.createdAt)}${days < 2 ? ' · versheid werkt vanaf 2 dagen historie' : ''}. Tik op een kaart voor details.`
+    ? `${results.length.toLocaleString('nl-NL')} ${modeText} · waarde ≥ ${fmtEur(Number(f.minRef) || 0)} · ${withRatio} met gemeten conditieverhoudingen${results.hiddenStale ? ` · ${results.hiddenStale} verborgen die gisteren al zo laag stonden` : ''}${results.hiddenSlow ? ` · ${results.hiddenSlow} traag verkopende verborgen` : ''}${results.hiddenImplausible ? ` · ${results.hiddenImplausible} onwaarschijnlijke verborgen` : ''}${results.hiddenSuspect ? ` · ${results.hiddenSuspect} verborgen die waarschijnlijk niet Engels/Good+ zijn` : ''} · prijzen van ${fmtDate(state.meta?.sources?.guide?.createdAt)}${days < 2 ? ' · versheid werkt vanaf 2 dagen historie' : ''}. Tik op een kaart voor details.`
     : `Geen treffers. Verlaag "Waarde vanaf", kies "Koopjes als Good of beter" of zet een filter uit.${results.hiddenStale ? ` (${results.hiddenStale} verborgen die gisteren al zo laag stonden.)` : ''}`;
   $$('#deals-table th[data-sort]').forEach((th) => th.classList.toggle('sorted', th.dataset.sort === f.sort));
   $('#filters-desc').textContent = `${modeText.split(' (')[0]} · waarde ≥ €${f.minRef}${f.exp ? ` · ${expLabel(Number(f.exp))}` : ''}`;
   tbody.replaceChildren(...shown.map((d) => {
     const tr = document.createElement('tr');
     tr.innerHTML = `
-      <td class="name">${nameHtml(d.name, d.id, d.variant)}${d.variant === 'h' ? '<span class="badge accent">holo</span>' : ''}${rarityBadge(d)}${dealBadge(d)}${suspectBadge(d)}${d.refs.source === 'ratio' ? '<span class="badge" title="Conditieverhoudingen uit VS-marktdata">VS</span>' : ''}${d.fresh === 'new' ? '<span class="badge good">nieuw laag</span>' : ''}
+      <td class="name">${nameHtml(d.name, d.id, d.variant)}${d.variant === 'h' ? '<span class="badge accent">holo</span>' : ''}${rarityBadge(d)}${dealBadge(d)}${suspectBadge(d)}${d.refs.source === 'vs' ? '<span class="badge" title="Conditieverhoudingen uit VS-marktdata">VS</span>' : d.refs.source === 'ct' ? '<span class="badge" title="Conditieverhoudingen uit CardTrader-vraagprijzen NM/Good+">CT</span>' : ''}${!d.ref.ok ? `<span class="badge warn" title="${escapeHtml(d.ref.reasons.map((r) => r.text).join('; '))}">ref?</span>` : ''}${d.fresh === 'new' ? '<span class="badge good">nieuw laag</span>' : ''}
         <span class="set-inline">${escapeHtml(expLabel(d.exp))}</span>
         <span class="m-stats"><b>${fmtEur(d.low)}</b>${d.ctFloor != null ? ` · CT EN ${fmtEur(d.ctFloor)}` : ''} · NM ${fmtEur(d.refs.NM)} · Good ${fmtEur(d.refs.GD)} · marge min. ${marginHtml(d.marginMin)} · ${liqHtml(d)} ${cardLink(d.name, d.exp, d.id)}</span></td>
       <td class="num opt">${fmtEur(d.low)}</td>
@@ -392,7 +392,8 @@ async function openDetail(id, variant = 'n') {
   const dealRow = state.deals.find((r) => r[0] === id); const row = dealRow || state.indexById?.get(id);
   const name = row ? row[1] : `#${id}`; const exp = row ? row[2] : null; const t = tcgdexOf(id);
   const p = pricesFor(id, variant); const d = dealRow ? evaluate(dealRow, variant) : null;
-  const refs = condRefs(id, variant, p?.avg7);
+  const ref = nmReference(id, variant, p);
+  const refs = condRefs(id, variant, ref.nm);
   const ct = state.ct.map?.byCardmarket?.[id];
   const us = usPrice(id, variant); const spread = us != null && p?.avg7 ? p.avg7 / us - 1 : null;
   const played = state.play?.cards?.[id];
@@ -408,8 +409,9 @@ async function openDetail(id, variant = 'n') {
     played ? `<div><div class="k">Gespeeld (30 d)</div><div class="v">${played.decks} decks</div></div>` : '',
     vs && vs.some((v) => v != null) ? `<div><div class="k">VS 52w laag / hoog</div><div class="v">${fmtEur(Math.min(...vs.slice(-52).filter((v) => v != null)) * (state.tcgcsv?.rate?.usd_eur || 1))} / ${fmtEur(Math.max(...vs.slice(-52).filter((v) => v != null)) * (state.tcgcsv?.rate?.usd_eur || 1))}</div></div>` : '',
   ].join('');
-  const condTable = refs ? `<table class="facts-table"><tr><th>Conditie</th><th>Waarde</th><th>Marge bij laagste ${fmtEur(p?.low)}</th></tr>${['NM', 'EX', 'GD', 'PL', 'PO'].map((k) => `<tr><td>${COND_LABEL[k]}</td><td>${fmtEur(refs[k])}</td><td>${marginHtml(marginOf(refs[k], p?.low))}</td></tr>`).join('')}</table><p class="msg">${refs.source === 'ratio' ? 'Verhoudingen uit VS-marktdata per conditie (TCGplayer via JustTCG); NM-waarde = Cardmarket 7d-verkoopgemiddelde.' : 'Vaste verhoudingen (EX 90 %, Good 75 %, Played 60 %, Poor 40 % van NM); voor deze kaart zijn nog geen VS-conditiedata opgehaald.'}</p>` : '<p class="msg">Geen 7d-verkoopgemiddelde, dus geen waarde per conditie.</p>';
-  const wants = `${cleanName(name)}${t?.number ? ` #${t.number}` : ''} · ${expLabel(exp)} · ${variant === 'h' ? 'reverse holo' : 'normaal'} · Language: English · Min. condition: Good · Buy price: ${fmtEur(suggestedBuyPrice(p?.avg7))} · Email Alarm aan`;
+  const condTable = refs ? `<table class="facts-table"><tr><th>Conditie</th><th>Waarde</th><th>Marge bij laagste ${fmtEur(p?.low)}</th></tr>${['NM', 'EX', 'GD', 'PL', 'PO'].map((k) => `<tr><td>${COND_LABEL[k]}</td><td>${fmtEur(refs[k])}</td><td>${marginHtml(marginOf(refs[k], p?.low))}</td></tr>`).join('')}</table><p class="msg">Verhoudingen: ${SOURCE_LABEL[refs.source] || refs.source}.</p>` : '<p class="msg">Geen bruikbare referentie, dus geen waarde per conditie.</p>';
+  const refBlock = p ? `<h3>Referentie (NM)</h3><ul class="check-list">${ref.reasons.map((r) => `<li class="warn">⚠ ${escapeHtml(r.text)}</li>`).join('')}${ref.warnings.map((w) => `<li>△ ${escapeHtml(w.text)}</li>`).join('')}<li>Cardmarket: trend ${fmtEur(p.trend)}, 7d-gemiddelde ${fmtEur(p.avg7)}, 30d-gemiddelde ${fmtEur(p.avg30)}, laatste verkoop ${fmtEur(p.avg1)} → mediaan ${fmtEur(ref.nm)}${ref.ok ? '' : ' (onbetrouwbaar: telt niet als koopje)'}.</li>${ctf ? `<li>CardTrader-vraagprijs Engels: NM ${fmtEur(ctf[3])}, Good+ ${fmtEur(ctf[0])} (${ctf[1]} aanbiedingen).</li>` : ''}${us != null ? `<li>VS-markt (TCGplayer): ${fmtEur(us)}.</li>` : ''}</ul>` : '';
+  const wants = `${cleanName(name)}${t?.number ? ` #${t.number}` : ''} · ${expLabel(exp)} · ${variant === 'h' ? 'reverse holo' : 'normaal'} · Language: English · Min. condition: Good · Buy price: ${fmtEur(suggestedBuyPrice(ref.nm))} · Email Alarm aan`;
   body.innerHTML = `
     <button type="button" class="btn detail-close" id="detail-close">✕</button>
     <div class="detail-head">
@@ -418,12 +420,13 @@ async function openDetail(id, variant = 'n') {
         <h2>${nameHtml(name)}</h2>
         <div class="exp">${escapeHtml(expLabel(exp))}${t?.number ? ` · #${escapeHtml(t.number)}` : ''}${rarLabel ? ` · ${escapeHtml(t?.rarity || rarLabel)}` : ''}${variant === 'h' ? ' · holo/reverse' : ''}</div>
         <p>${d ? `${dealBadge(d)} ${freshHtml(d)} ${liqHtml(d)} ${reprintHtml(d)}` : ''} ${rotationHtml(t?.mark)} ${d && !d.plausible ? `<span class="badge warn" title="${escapeHtml(d.reasons.join('; '))}">onwaarschijnlijk</span>` : ''}</p>
-        <div class="metrics">${[['Laagste', p?.low], ['Trend', p?.trend], ['Gem. 1d', p?.avg1], ['Gem. 7d', p?.avg7], ['Gem. 30d', p?.avg30], ['Vorige 7d laagste', d?.prevLow]].map(([k, v]) => `<div><div class="k">${k}</div><div class="v">${fmtEur(v)}</div></div>`).join('')}${signals}</div>
+        <div class="metrics">${[['Laagste', p?.low], ['NM-waarde', ref.nm], ['Trend', p?.trend], ['Gem. 7d', p?.avg7], ['Gem. 30d', p?.avg30], ['Vorige 7d laagste', d?.prevLow]].map(([k, v]) => `<div><div class="k">${k}</div><div class="v">${fmtEur(v)}</div></div>`).join('')}${signals}</div>
         ${spread != null ? `<p class="msg">EU t.o.v. VS: ${spread < -0.2 ? 'Cardmarket ligt duidelijk onder de VS-markt (onderwaardering binnen de EU?)' : spread > 0.2 ? 'Cardmarket ligt boven de VS-markt' : 'EU en VS in lijn'}. VS-inkoop is sinds de €3-douaneheffing (juli 2026) niet rendabel; dit is alleen een waarderingssignaal.</p>` : ''}
         <div class="detail-actions">${linksHtml(name, exp, id)}${ct ? ` <a href="${cardtraderUrl(ct[0])}" target="_blank" rel="noopener">CardTrader ↗</a>` : ''}${rar && exp != null ? ` <a href="${cardmarketRarityUrl(gameSlug(), exp, rar)}" target="_blank" rel="noopener" title="Alle kaarten van deze rarity in deze set op Cardmarket, goedkoopste eerst">Set per rarity ↗</a>` : ''} <button type="button" class="btn" id="detail-wants">Kopieer voor wants list</button></div>
         <p class="msg" id="detail-msg"></p>
       </div>
     </div>
+    ${refBlock}
     ${langCheckHtml(d, p, ctf, peer, peers.length)}
     ${condTable}
     <h3>Verloop (Cardmarket)</h3>${chartSvg(histFor(id, variant))}
@@ -435,7 +438,7 @@ async function openDetail(id, variant = 'n') {
 function langCheckHtml(d, p, ctf, peer, nPeers) {
   const items = [];
   if (d) { for (const r of d.suspectReasons) items.push(`<li class="warn">⚠ ${escapeHtml(r.text)}</li>`); for (const n of d.notes) items.push(`<li>${n.code === 'drop' ? '★' : '✓'} ${escapeHtml(n.text)}</li>`); }
-  if (ctf) items.push(`<li>CardTrader, Engels en Good+ of beter: goedkoopste ${fmtEur(ctf[0])} (${ctf[1]} aanbieding${ctf[1] === 1 ? '' : 'en'}${ctf[2] ? ', goedkoopste via CardTrader Zero' : ''}); Cardmarket-laagste is ${p?.low != null ? fmtPct(p.low / ctf[0]) : '–'} daarvan.</li>`);
+  if (ctf) items.push(`<li>CardTrader, Engels en Good+ of beter: goedkoopste ${fmtEur(ctf[0])} (${ctf[1]} aanbieding${ctf[1] === 1 ? '' : 'en'}${ctf[2] ? ', goedkoopste via CardTrader Zero' : ''}${ctf[3] != null ? `; NM vanaf ${fmtEur(ctf[3])}` : ''}); Cardmarket-laagste is ${p?.low != null ? fmtPct(p.low / ctf[0]) : '–'} daarvan.</li>`);
   else items.push('<li>Geen CardTrader-meting voor deze kaart (set nog niet opgehaald of geen Engelse Good+-aanbieding).</li>');
   if (d?.medLow != null && p?.low != null) items.push(`<li>60-dagen-mediaan van de laagste: ${fmtEur(d.medLow)}; vandaag ${fmtPct(p.low / d.medLow)} daarvan${d.daysAtLow ? `, al ${d.daysAtLow} dag(en) zo` : ''}.</li>`);
   if (peer) items.push(`<li>Soortgenoten (zelfde set en rarity, ${peer.n}): mediaan laagste ${fmtEur(peer.medLow)}${peer.medValue != null ? `, mediaan NM-waarde ${fmtEur(peer.medValue)}` : ''}; deze kaart ligt op ${fmtPct(peer.lowRatio)} van hun laagste${peer.lowRatio < 0.5 ? ' (uitschieter: foutlisting, anderstalig, beschadigd of echt koopje)' : ''}.</li>`);
